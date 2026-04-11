@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Floosh</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{height:100vh;display:flex;align-items:center;justify-content:center;font-family:'Noto Sans',sans-serif;overflow:hidden;background:url('https://cdn.jsdelivr.net/gh/TheAlphaLeopard/fjam/background.png') center/cover no-repeat}
+    #dz{width:240px;height:90px;border:2px dashed rgba(255,255,255,.25);border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:.8rem;color:rgba(255,255,255,.5);transition:all .2s;user-select:none;backdrop-filter:blur(8px);background:rgba(0,0,0,.35)}
+    #dz:hover{border-color:rgba(255,255,255,.5);color:rgba(255,255,255,.8);background:rgba(0,0,0,.5)}#dz:active{transform:scale(.97)}#dz.over{border-color:#4ade80;color:#4ade80}
+    #s{position:fixed;top:12px;left:50%;transform:translateX(-50%);font-size:.7rem;color:rgba(255,255,255,.4);letter-spacing:.03em;pointer-events:none}
+    input[type="file"]{display:none}
+    #bar{position:fixed;bottom:0;left:0;right:0;height:48px;display:flex;align-items:center;padding:0 8px;gap:2px;background:rgba(0,0,0,.85);backdrop-filter:blur(12px);border-top:1px solid rgba(255,255,255,.08);transform:translateY(100%);transition:transform .25s ease;z-index:200}
+    #bar.show{transform:translateY(0)}
+    #bar .logo{height:28px;margin-right:6px;opacity:.7}
+    #bar button{height:32px;padding:0 14px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.7);font:600 .7rem/1 'Noto Sans',sans-serif;letter-spacing:.04em;border-radius:4px;cursor:pointer;transition:all .15s;white-space:nowrap}
+    #bar button:hover{background:rgba(255,255,255,.15);color:#fff}
+    #bar button svg{width:16px;height:16px;fill:currentColor;vertical-align:middle}
+    #bar .spacer{flex:1}
+  </style>
+</head>
+<body>
+  <div id="dz">Drop assets here</div>
+  <div id="bar">
+    <img class="logo" src="https://cdn.jsdelivr.net/gh/TheAlphaLeopard/fjam/logo.png" alt="Floosh">
+    <button id="btnJ">Run .JAM</button>
+    <button id="btnF">Pack .JAM</button>
+    <div class="spacer"></div>
+    <button id="btnFs"><svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg></button>
+  </div>
+  <input type="file" id="fIn" webkitdirectory directory multiple>
+  <input type="file" id="jIn" accept=".jam">
+  <div id="s">Ready</div>
+
+<script type="module">
+import * as fflate from 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm';
+
+const $=id=>document.getElementById(id),
+      dz=$('dz'),bar=$('bar'),s=$('s'),
+      fIn=$('fIn'),jIn=$('jIn'),
+      btnF=$('btnF'),btnJ=$('btnJ'),btnFs=$('btnFs'),
+      status=msg=>s.textContent=msg;
+
+// ── Base122 codec (for .JAM format) ──────────────────────────────
+const B122=(()=>{const I=[0,10,13,34,38,92],IM=new Int8Array(128).fill(-1);
+I.forEach((v,i)=>IM[v]=i);
+return{
+enc(d){const o=new Uint8Array(d.length*1.5+10);let oi=0,ba=0,bl=0;
+for(let i=0;i<d.length;i++){ba=(ba<<8)|d[i];bl+=8;
+while(bl>=7){bl-=7;const b=(ba>>>bl)&0x7F,il=IM[b];
+if(il!==-1){let nx=-1;if(bl<7&&i+1<d.length){ba=(ba<<8)|d[++i];bl+=8;}
+if(bl>=7){bl-=7;nx=(ba>>>bl)&0x7F;}
+if(nx===-1){o[oi++]=0xC2|(7<<2)|(b>>6);o[oi++]=0x80|(b&0x3F);}
+else{o[oi++]=0xC2|(il<<2)|(nx>>6);o[oi++]=0x80|(nx&0x3F);}}
+else o[oi++]=b;}}
+if(bl>0){const b=(ba<<(7-bl))&0x7F,il=IM[b];
+if(il!==-1){o[oi++]=0xC2|(7<<2)|(b>>6);o[oi++]=0x80|(b&0x3F);}else o[oi++]=b;}
+return o.subarray(0,oi);},
+dec(d){const o=new Uint8Array(d.length);let oi=0,ba=0,bl=0;
+for(let i=0;i<d.length;i++){const c=d[i];
+if(c>127){const il=(c>>>2)&7,nx=d[++i]&0x3F;
+if(il!==7){ba=(ba<<7)|I[il];if((bl+=7)>=8)o[oi++]=(ba>>>(bl-=8))&0xFF;}
+ba=(ba<<7)|(((c&1)<<6)|nx);if((bl+=7)>=8)o[oi++]=(ba>>>(bl-=8))&0xFF;}
+else{ba=(ba<<7)|c;if((bl+=7)>=8)o[oi++]=(ba>>>(bl-=8))&0xFF;}}
+return o.subarray(0,oi);}
+}})();
+
+// ── MIME lookup ──────────────────────────────────────────────────
+const MIME={html:'text/html',htm:'text/html',css:'text/css',txt:'text/plain',
+js:'application/javascript',mjs:'application/javascript',json:'application/json',wasm:'application/wasm',
+png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',svg:'image/svg+xml',webp:'image/webp',ico:'image/x-icon',bmp:'image/bmp',
+mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',m4a:'audio/mp4',flac:'audio/flac',aac:'audio/aac',
+mp4:'video/mp4',webm:'video/webm',ogv:'video/ogg',
+ttf:'font/ttf',woff:'font/woff',woff2:'font/woff2',otf:'font/otf',
+pck:'application/octet-stream',unityweb:'application/octet-stream',bin:'application/octet-stream',data:'application/octet-stream',
+love:'application/octet-stream',pak:'application/octet-stream',glb:'model/gltf-binary',gltf:'model/gltf+json',
+xml:'application/xml',pdf:'application/pdf',webmanifest:'application/manifest+json'};
+const mime=p=>{let l=p.toLowerCase().replace(/\.part\d+$/,'');
+if(l.endsWith('.wasm.code.unityweb')||l.endsWith('.wasm.framework.unityweb'))return'application/wasm';
+return MIME[l.split('.').pop()]||'application/octet-stream';};
+
+// ── UI ───────────────────────────────────────────────────────────
+btnF.onclick=()=>fIn.click();
+btnJ.onclick=()=>jIn.click();
+btnFs.onclick=()=>{if(!document.fullscreenElement)document.documentElement.requestFullscreen();else document.exitFullscreen();};
+let barTimer;
+const showBar=()=>{clearTimeout(barTimer);bar.classList.add('show');};
+const hideBar=()=>{barTimer=setTimeout(()=>bar.classList.remove('show'),800);};
+document.onmousemove=e=>{e.clientY>innerHeight-60?showBar():hideBar();};
+bar.onmouseenter=showBar;bar.onmouseleave=hideBar;
+dz.ondragover=e=>{e.preventDefault();dz.classList.add('over');};
+dz.ondragleave=()=>dz.classList.remove('over');
+dz.ondrop=async e=>{e.preventDefault();dz.classList.remove('over');const f=[];status("scanning...");
+for(const it of Array.from(e.dataTransfer.items)){const en=it.webkitGetAsEntry?.();
+if(en)await walk(en,'',f);else{const fi=it.getAsFile();if(fi)f.push({path:fi.name,file:fi});}}
+if(f.length===1&&f[0].path.endsWith('.jam'))openJam(f[0].file);else packJam(f);};
+jIn.onchange=e=>{const f=e.target.files[0];if(f)openJam(f);};
+fIn.onchange=e=>{const fs=Array.from(e.target.files).map(f=>({path:f.webkitRelativePath||f.name,file:f}));if(fs.length)packJam(fs);};
+
+async function walk(en,path,out){
+if(en.isFile)out.push({path:path+en.name,file:await new Promise(r=>en.file(r))});
+else if(en.isDirectory){const rd=en.createReader();
+const es=await new Promise(r=>{let a=[];const q=()=>rd.readEntries(b=>b.length?(a.push(...b),q()):r(a));q();});
+for(const e of es)await walk(e,path+en.name+'/',out);}}
+
+// ── ENCODE: Folder → .JAM ───────────────────────────────────────
+async function packJam(files){status("packing...");
+try{const map={};await Promise.all(files.map(async f=>{
+if(f.path.includes('__MACOSX')||f.path.endsWith('.DS_Store'))return;
+map[f.path]=new Uint8Array(await f.file.arrayBuffer());}));
+const zip=fflate.zipSync(map,{level:1}),payload=B122.enc(zip),
+hdr=new Uint8Array([74,65,77,0]),len=new Uint8Array(4);
+new DataView(len.buffer).setUint32(0,payload.length,true);
+const blob=new Blob([hdr,len,payload],{type:'application/octet-stream'}),
+a=document.createElement('a');a.href=URL.createObjectURL(blob);
+const first=files.find(f=>f.path.includes('/'));
+a.download=(first?first.path.split('/')[0]:'app')+'.jam';
+a.click();status(`saved: ${(blob.size/1048576).toFixed(2)}mb`);
+}catch(e){status("err: "+e.message);}}
+
+// ── DECODE: .JAM → VFS ──────────────────────────────────────────
+async function openJam(file){status("loading...");
+try{let buf=await file.arrayBuffer(),v=new DataView(buf);
+if(v.getUint32(0,false)!==0x4A414D00)throw new Error("Invalid JAM");
+const zip=B122.dec(new Uint8Array(buf,8,v.getUint32(4,true)));
+buf=null;
+const unz=fflate.unzipSync(zip);
+
+const urlMap=new Map(),revMap=new Map();
+const imap={imports:{}};
+const baseDirGuess=Object.keys(unz).find(k=>k.toLowerCase().endsWith('index.html'))
+                    ||Object.keys(unz).find(k=>k.toLowerCase().endsWith('.html'))||'';
+const base=baseDirGuess.includes('/')?baseDirGuess.substring(0,baseDirGuess.lastIndexOf('/')+1):'';
+
+for(const p in unz){if(p.endsWith('/')||p.includes('__MACOSX')||p.endsWith('.DS_Store'))continue;
+const cp=p.replace(/\\/g,'/').replace(/^\/+/,''),type=mime(cp);
+const url=URL.createObjectURL(new Blob([unz[p]],{type}));
+revMap.set(url,cp);
+urlMap.set(cp,url);urlMap.set('/'+cp,url);urlMap.set('./'+cp,url);
+if(cp.startsWith(base)){const rel=cp.substring(base.length);
+urlMap.set(rel,url);urlMap.set('/'+rel,url);urlMap.set('./'+rel,url);
+urlMap.set(rel+'.part1',url);}
+const fn=cp.split('/').pop();urlMap.set(fn,url);urlMap.set('./'+fn,url);urlMap.set('/'+fn,url);
+urlMap.set(cp+'.part1',url);urlMap.set(fn+'.part1',url);
+if(/\.(m?js|wasm)$/i.test(cp)){imap.imports[cp]=url;imap.imports['/'+cp]=url;imap.imports['./'+cp]=url;
+if(!imap.imports[fn]){imap.imports[fn]=url;imap.imports['./'+fn]=url;imap.imports['/'+fn]=url;}}
+unz[p]=null;}
+
+boot(urlMap,revMap,imap,base);
+}catch(e){status("err: "+e.message);}}
+
+// ── VFS CORE ─────────────────────────────────────────────────────
+function boot(urlMap,revMap,imap,base){
+const entry=[...urlMap.keys()].find(k=>k.toLowerCase().endsWith('index.html'))
+           ||[...urlMap.keys()].find(k=>k.toLowerCase().endsWith('.html'));
+if(!entry){status("no HTML entry");return;}
+
+const R=url=>{
+if(!url||typeof url!=='string'||url.startsWith('blob:')||url.startsWith('data:'))return url;
+if(urlMap.has(url))return urlMap.get(url);
+try{const u=new URL(url,"http://vfs.local/");
+if(u.hostname!=='vfs.local'&&u.hostname!==location.hostname&&u.hostname!=='')return url;
+let p=decodeURIComponent(u.pathname);if(p.startsWith('/'))p=p.substring(1);
+if(urlMap.has(p))return urlMap.get(p);
+const f=p.split('/').pop();if(urlMap.has(f))return urlMap.get(f);
+}catch(e){}return url;};
+
+window.__R__=R;
+
+status("launching...");
+fetch(urlMap.get(entry)).then(r=>r.text()).then(html=>{
+
+// ── Script-safe regex: extract <script>/<style> blocks, regex HTML only, restore ──
+const blocks=[];
+html=html.replace(/<(script|style)[\s>][\s\S]*?<\/\1>/gi,m=>{blocks.push(m);return'\x00B'+(blocks.length-1)+'\x00';});
+html=html.replace(/((?:src|href|data)\s*=\s*["'])([^"']+)(["'])/gi,(_,pre,url,post)=>pre+R(url)+post);
+html=html.replace(/(url\(\s*["']?)([^"')]+)(["']?\s*\))/gi,(_,pre,url,post)=>pre+R(url)+post);
+html=html.replace(/\x00B(\d+)\x00/g,(_,i)=>blocks[+i]);
+
+const rt=`(function(){
+var R=window.__R__;
+var _V="http://vfs.local/";
+// ── Document URL shield: make document.URL/baseURI return valid http URL ──
+// After document.open()/write(), document.URL is "about:blank" which crashes
+// Unity: new URL(path, document.URL) throws. Return valid vfs.local instead.
+Object.defineProperty(Document.prototype,'URL',{get:function(){return _V;},configurable:true});
+Object.defineProperty(Document.prototype,'baseURI',{get:function(){return _V;},configurable:true});
+// ── URL constructor shield: catch invalid base (blob:/about:) → substitute vfs.local ──
+var _URL=URL;
+URL=function(u,b){
+if(b!==undefined){
+if(typeof b==='string'&&(b.startsWith('blob:')||b.startsWith('about:')))b=_V;
+try{return new _URL(u,b);}catch(e){try{return new _URL(u,_V);}catch(e2){
+return{href:String(u),pathname:'/'+String(u),protocol:'http:',hostname:'vfs.local',origin:_V};}}
+}else{
+try{return new _URL(u);}catch(e){return{href:String(u),pathname:'/'+String(u),protocol:'http:',hostname:'vfs.local',origin:_V};}}
+};
+URL.createObjectURL=_URL.createObjectURL;URL.revokeObjectURL=_URL.revokeObjectURL;
+URL.prototype=_URL.prototype;
+// ── fetch + XHR ─────────────────────────────────────────────────
+var _f=fetch;fetch=function(i,n){var u=i instanceof Request?i.url:i;var r=R(u);
+return i instanceof Request?_f(new Request(r,i),n):_f(r,n);};
+var _X=XMLHttpRequest;XMLHttpRequest=function(){var x=new _X,o=x.open;
+x.open=function(m,u){return o.call(this,m,R(u))};return x;};
+// ── setAttribute + property setters ─────────────────────────────
+var _sa=Element.prototype.setAttribute;
+Element.prototype.setAttribute=function(n,v){return _sa.call(this,n,['src','href','data'].indexOf(n)!==-1?R(v):v);};
+var pp=function(p,c){var d=Object.getOwnPropertyDescriptor(c.prototype,p);if(!d)return;
+Object.defineProperty(c.prototype,p,{set:function(v){d.set.call(this,R(v));},get:d.get,configurable:true});};
+[HTMLScriptElement,HTMLImageElement,HTMLLinkElement,HTMLIFrameElement,HTMLSourceElement,HTMLVideoElement,HTMLAudioElement].forEach(function(c){if(c)pp('src',c);});
+if(HTMLLinkElement)pp('href',HTMLLinkElement);if(HTMLObjectElement)pp('data',HTMLObjectElement);
+// ── Audio ───────────────────────────────────────────────────────
+if(window.Audio){var _A=Audio;Audio=function(s){return s?new _A(R(s)):new _A();};Audio.prototype=_A.prototype;}
+// ── Worker ──────────────────────────────────────────────────────
+if(window.Worker){var _W=Worker;Worker=function(u,o){var r=R(u);
+if(r.startsWith('blob:')){var M=${JSON.stringify(imap.imports)};
+var _rmW=${JSON.stringify([...revMap].filter(e=>/\.(m?js|wasm)$/i.test(e[1])))};
+var code='var M='+JSON.stringify(M)+';var _rmW=new Map('+JSON.stringify(_rmW)+');var _URL=URL;URL=function(u,b){if(b!==undefined){if(typeof b==="string"&&(b.startsWith("blob:")||b.startsWith("about:")))b="http://vfs.local/";try{return new _URL(u,b);}catch(e){try{return new _URL(u,"http://vfs.local/");}catch(e2){return{href:String(u),pathname:"/"+String(u),protocol:"http:",hostname:"vfs.local",origin:"http://vfs.local/"};}}}else{try{return new _URL(u);}catch(e){return{href:String(u),pathname:"/"+String(u),protocol:"http:",hostname:"vfs.local",origin:"http://vfs.local/"};}}};URL.createObjectURL=_URL.createObjectURL;URL.revokeObjectURL=_URL.revokeObjectURL;URL.prototype=_URL.prototype;function _r(u){if(!u||u.startsWith("blob:")||u.startsWith("data:"))return u;try{var p=new URL(u,"http://vfs.local/");var s=decodeURIComponent(p.pathname);if(s.startsWith("/"))s=s.substring(1);if(M[s])return M[s];var f=s.split("/").pop();for(var k in M)if(k.endsWith("/"+f)||k===f)return M[k];}catch(e){}return u;}var _i=importScripts;importScripts=function(){_i.apply(null,[].slice.call(arguments).map(_r));};var _wf=fetch;fetch=function(i,n){var u=i instanceof Request?i.url:i;var r=_r(u);return i instanceof Request?_wf(new Request(r,i),n):_wf(r,n);};_i("'+r+'");';
+return new _W(URL.createObjectURL(new Blob([code],{type:'application/javascript'})),o);}
+return new _W(r,o);};}
+// ── document.write/writeln patch ────────────────────────────────
+var _dw=document.write,_dwl=document.writeln;
+var _ps=function(s){if(typeof s!=='string')return s;
+return s.replace(/((?:src|href|data)\\s*=\\s*["'])([^"']+)(["'])/gi,function(_,pre,url,post){var r=R(url);return r!==url?pre+r+post:_;});};
+document.write=function(){return _dw.apply(document,[].slice.call(arguments).map(_ps));};
+document.writeln=function(){return _dwl.apply(document,[].slice.call(arguments).map(_ps));};
+// ── MutationObserver for dynamic elements ───────────────────────
+var _pe=function(n){if(n.nodeType!==1)return;
+['src','href','data'].forEach(function(a){if(n.hasAttribute(a)){var o=n.getAttribute(a),r=R(o);if(r!==o)n.setAttribute(a,r);}});};
+new MutationObserver(function(ms){ms.forEach(function(m){m.addedNodes.forEach(function(n){
+_pe(n);if(n.querySelectorAll)n.querySelectorAll('[src],[href],[data]').forEach(_pe);});});})
+.observe(document.documentElement,{childList:true,subtree:true});
+// ── CSS style patching ──────────────────────────────────────────
+var _ru=function(s){return typeof s!=='string'?s:s.replace(/url\\(\\s*["']?([^"')]+)["']?\\s*\\)/gi,function(m,u){var r=R(u);return r!==u?'url("'+r+'")':m;});};
+var _sp=CSSStyleDeclaration.prototype.setProperty;
+CSSStyleDeclaration.prototype.setProperty=function(p,v,pr){return _sp.call(this,p,_ru(v),pr);};
+var _cs=Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype,'cssText');
+if(_cs){Object.defineProperty(CSSStyleDeclaration.prototype,'cssText',{set:function(v){_cs.set.call(this,_ru(v));},get:_cs.get,configurable:true});}
+console.log("Floosh 5 VFS Active");})();`;
+
+const inject='<script type="importmap">'+JSON.stringify(imap)+'</'+'script><script>'+rt+'</'+'script>';
+const hi=html.toLowerCase().indexOf('<head>');
+const final=hi!==-1?html.slice(0,hi+6)+inject+html.slice(hi+6):inject+html;
+document.open();document.write(final);document.close();
+});}
+</script>
+</body>
+</html>
