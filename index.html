@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Floosh</title>
+  <title>f(jam)</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;600&display=swap" rel="stylesheet">
@@ -164,7 +164,7 @@ if(!url||typeof url!=='string'||url.startsWith('blob:')||url.startsWith('data:')
 if(urlMap.has(url))return urlMap.get(url);
 try{const u=new URL(url,"http://vfs.local/");
 if(u.hostname!=='vfs.local'&&u.hostname!==location.hostname&&u.hostname!=='')return url;
-let p=decodeURIComponent(u.pathname);if(p.startsWith('/'))p=p.substring(1);
+let p=decodeURIComponent(u.pathname).replace(/[?#].*$/,'');if(p.startsWith('/'))p=p.substring(1);
 if(urlMap.has(p))return urlMap.get(p);
 const f=p.split('/').pop();if(urlMap.has(f))return urlMap.get(f);
 }catch(e){}return url;};
@@ -174,9 +174,10 @@ window.__R__=R;
 status("launching...");
 fetch(urlMap.get(entry)).then(r=>r.text()).then(html=>{
 
-// ── Script-safe regex: extract <script>/<style> blocks, regex HTML only, restore ──
+// ── Script-safe regex: extract only <script> CONTENT, keep opening tags for URL rewriting ──
+// <style> blocks stay in HTML so url() patterns get rewritten; CSS has no src=/href=/data= so attr regex can't corrupt it
 const blocks=[];
-html=html.replace(/<(script|style)[\s>][\s\S]*?<\/\1>/gi,m=>{blocks.push(m);return'\x00B'+(blocks.length-1)+'\x00';});
+html=html.replace(/<script([^>]*)>([\s\S]*?)<\/script>/gi,(_,attrs,content)=>{blocks.push(content);return'<script'+attrs+'>\x00B'+(blocks.length-1)+'\x00</'+'script>';});
 html=html.replace(/((?:src|href|data)\s*=\s*["'])([^"']+)(["'])/gi,(_,pre,url,post)=>pre+R(url)+post);
 html=html.replace(/(url\(\s*["']?)([^"')]+)(["']?\s*\))/gi,(_,pre,url,post)=>pre+R(url)+post);
 html=html.replace(/\x00B(\d+)\x00/g,(_,i)=>blocks[+i]);
@@ -240,7 +241,7 @@ var _sp=CSSStyleDeclaration.prototype.setProperty;
 CSSStyleDeclaration.prototype.setProperty=function(p,v,pr){return _sp.call(this,p,_ru(v),pr);};
 var _cs=Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype,'cssText');
 if(_cs){Object.defineProperty(CSSStyleDeclaration.prototype,'cssText',{set:function(v){_cs.set.call(this,_ru(v));},get:_cs.get,configurable:true});}
-console.log("Floosh 5 VFS Active");})();`;
+console.log("fjam VFS Active");})();`;
 
 const inject='<script type="importmap">'+JSON.stringify(imap)+'</'+'script><script>'+rt+'</'+'script>';
 const hi=html.toLowerCase().indexOf('<head>');
