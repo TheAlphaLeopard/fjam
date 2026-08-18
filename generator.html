@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>VFS Compiler</title>
+</head>
+<body>
+  <input type="file" id="fIn" webkitdirectory directory multiple>
+  <button id="btn">Compile</button>
+  
+  <script type="module">
+    // ── Base122 Codec (Optimized for UTF-8 safe HTML embedding) ──────────────────
+    const B122 = (() => {
+      const I = [0, 10, 13, 34, 38, 92], IM = new Int8Array(128).fill(-1);
+      I.forEach((v, i) => IM[v] = i);
+      return {
+        enc(d) {
+          const o = new Uint8Array(d.length * 1.5 + 10); let oi = 0, ba = 0, bl = 0;
+          for (let i = 0; i < d.length; i++) {
+            ba = (ba << 8) | d[i]; bl += 8;
+            while (bl >= 7) {
+              bl -= 7; const b = (ba >>> bl) & 0x7F, il = IM[b];
+              if (il !== -1) {
+                let nx = -1; if (bl < 7 && i + 1 < d.length) { ba = (ba << 8) | d[++i]; bl += 8; }
+                if (bl >= 7) { bl -= 7; nx = (ba >>> bl) & 0x7F; }
+                if (nx === -1) { o[oi++] = 0xC2 | (7 << 2) | (b >> 6); o[oi++] = 0x80 | (b & 0x3F); }
+                else { o[oi++] = 0xC2 | (il << 2) | (nx >> 6); o[oi++] = 0x80 | (nx & 0x3F); }
+              } else o[oi++] = b;
+            }
+          }
+          if (bl > 0) {
+            const b = (ba << (7 - bl)) & 0x7F, il = IM[b];
+            if (il !== -1) { o[oi++] = 0xC2 | (7 << 2) | (b >> 6); o[oi++] = 0x80 | (b & 0x3F); } else o[oi++] = b;
+          }
+          return o.subarray(0, oi);
+        },
+        dec(d) {
+          const o = new Uint8Array(d.length); let oi = 0, ba = 0, bl = 0;
+          for (let i = 0; i < d.length; i++) {
+            const c = d[i];
+            if (c > 127) {
+              const il = (c >>> 2) & 7, nx = d[++i] & 0x3F;
+              if (il !== 7) { ba = (ba << 7) | I[il]; if ((bl += 7) >= 8) o[oi++] = (ba >>> (bl -= 8)) & 0xFF; }
+              ba = (ba << 7) | (((c & 1) << 6) | nx); if ((bl += 7) >= 8) o[oi++] = (ba >>> (bl -= 8)) & 0xFF;
+            } else {
+              ba = (ba << 7) | c; if ((bl += 7) >= 8) o[oi++] = (ba >>> (bl -= 8)) & 0xFF;
+            }
+          }
+          return o.subarray(0, oi);
+        }
+      };
+    })();
+
+    // ── Runner Logic Injection ──────────────────────────────────────────────────
+    // We use .toString() to perfectly preserve nested template literals and regex
+    // so they are evaluated at runtime by the generated file without escaping hell.
+    const runnerLogic = async function init() {
+      const rawStr = document.getElementById('vfs_data').textContent.replace(/<\\\//g, '</');
+      const b122Bytes = new TextEncoder().encode(rawStr);
+      
+      // B122 Decode
+      const I = [0, 10, 13, 34, 38, 92], IM = new Int8Array(128).fill(-1);
+      I.forEach((v, i) => IM[v] = i);
+      const o = new Uint8Array(b122Bytes.length); let oi = 0, ba = 0, bl = 0;
+      for (let i = 0; i < b122Bytes.length; i++) {
+        const c = b122Bytes[i];
+        if (c > 127) {
+          const il = (c >>> 2) & 7, nx = b122Bytes[++i] & 0x3F;
+          if (il !== 7) { ba = (ba << 7) | I[il]; if ((bl += 7) >= 8) o[oi++] = (ba >>> (bl -= 8)) & 0xFF; }
+          ba = (ba << 7) | (((c & 1) << 6) | nx); if ((bl += 7) >= 8) o[oi++] = (ba >>> (bl -= 8)) & 0xFF;
+        } else {
+          ba = (ba << 7) | c; if ((bl += 7) >= 8) o[oi++] = (ba >>> (bl -= 8)) & 0xFF;
+        }
+      }
+      const compressed = o.subarray(0, oi);
+      
+      // Native Gzip Decompress
+      const ds = new DecompressionStream('gzip');
+      const decompressedStream = new Blob([compressed]).stream().pipeThrough(ds);
+      const buf = new Uint8Array(await new Response(decompressedStream).arrayBuffer());
+      const view = new DataView(buf.buffer);
+      let p = 0;
+      const files = {};
+      
+      // Flat Binary VFS Parse
+      while (p < buf.length) {
+        const pathLen = view.getUint32(p, true); p += 4;
+        const dataLen = view.getUint32(p, true); p += 4;
+        const path = new TextDecoder().decode(buf.slice(p, p + pathLen)); p += pathLen;
+        files[path] = buf.slice(p, p + dataLen); p += dataLen;
+      }
+
+      // MIME & Map Setup
+      const MIME = {html:'text/html',htm:'text/html',css:'text/css',txt:'text/plain',js:'application/javascript',mjs:'application/javascript',json:'application/json',wasm:'application/wasm',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',svg:'image/svg+xml',webp:'image/webp',ico:'image/x-icon',bmp:'image/bmp',mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',m4a:'audio/mp4',flac:'audio/flac',aac:'audio/aac',mp4:'video/mp4',webm:'video/webm',ogv:'video/ogg',ttf:'font/ttf',woff:'font/woff',woff2:'font/woff2',otf:'font/otf',pck:'application/octet-stream',unityweb:'application/octet-stream',bin:'application/octet-stream',data:'application/octet-stream',love:'application/octet-stream',pak:'application/octet-stream',glb:'model/gltf-binary',gltf:'model/gltf+json',xml:'application/xml',pdf:'application/pdf',webmanifest:'application/manifest+json'};
+      const mime = p => {
+        let l = p.toLowerCase().replace(/\.part\d+$/, '');
+        if (l.endsWith('.wasm.code.unityweb') || l.endsWith('.wasm.framework.unityweb')) return 'application/wasm';
+        return MIME[l.split('.').pop()] || 'application/octet-stream';
+      };
+
+      const urlMap = new Map(), revMap = new Map(), imap = { imports: {} };
+      const baseDirGuess = Object.keys(files).find(k => k.toLowerCase().endsWith('index.html')) || Object.keys(files).find(k => k.toLowerCase().endsWith('.html')) || '';
+      const base = baseDirGuess.includes('/') ? baseDirGuess.substring(0, baseDirGuess.lastIndexOf('/') + 1) : '';
+
+      for (const cp in files) {
+        if (cp.endsWith('/') || cp.includes('__MACOSX') || cp.endsWith('.DS_Store')) continue;
+        const type = mime(cp);
+        const url = URL.createObjectURL(new Blob([files[cp]], { type }));
+        revMap.set(url, cp);
+        urlMap.set(cp, url); urlMap.set('/' + cp, url); urlMap.set('./' + cp, url);
+        if (cp.startsWith(base)) {
+          const rel = cp.substring(base.length);
+          urlMap.set(rel, url); urlMap.set('/' + rel, url); urlMap.set('./' + rel, url);
+          urlMap.set(rel + '.part1', url);
+        }
+        const fn = cp.split('/').pop();
+        urlMap.set(fn, url); urlMap.set('./' + fn, url); urlMap.set('/' + fn, url);
+        urlMap.set(cp + '.part1', url); urlMap.set(fn + '.part1', url);
+        if (/\.(m?js|wasm)$/i.test(cp)) {
+          imap.imports[cp] = url; imap.imports['/' + cp] = url; imap.imports['./' + cp] = url;
+          if (!imap.imports[fn]) { imap.imports[fn] = url; imap.imports['./' + fn] = url; imap.imports['/' + fn] = url; }
+        }
+      }
+
+      const entry = [...urlMap.keys()].find(k => k.toLowerCase().endsWith('index.html')) || [...urlMap.keys()].find(k => k.toLowerCase().endsWith('.html'));
+      if (!entry) return;
+
+      const R = url => {
+        if (!url || typeof url !== 'string' || url.startsWith('blob:') || url.startsWith('data:')) return url;
+        if (urlMap.has(url)) return urlMap.get(url);
+        try {
+          const u = new URL(url, "http://vfs.local/");
+          if (u.hostname !== 'vfs.local' && u.hostname !== location.hostname && u.hostname !== '') return url;
+          let p = decodeURIComponent(u.pathname).replace(/[?#].*$/, '');
+          if (p.startsWith('/')) p = p.substring(1);
+          if (urlMap.has(p)) return urlMap.get(p);
+          const f = p.split('/').pop();
+          if (urlMap.has(f)) return urlMap.get(f);
+        } catch (e) {}
+        return url;
+      };
+      window.__R__ = R;
+
+      const html = await (await fetch(urlMap.get(entry))).text();
+      const blocks = [];
+      let parsedHtml = html.replace(/<script([^>]*)>([\s\S]*?)<\/script>/gi, (_, attrs, content) => { blocks.push(content); return '<script' + attrs + '>\x00B' + (blocks.length - 1) + '\x00</' + 'script>'; });
+      parsedHtml = parsedHtml.replace(/((?:src|href|data)\s*=\s*["'])([^"']+)(["'])/gi, (_, pre, url, post) => pre + R(url) + post);
+      parsedHtml = parsedHtml.replace(/(url\(\s*["']?)([^"')]+)(["']?\s*\))/gi, (_, pre, url, post) => pre + R(url) + post);
+      parsedHtml = parsedHtml.replace(/\x00B(\d+)\x00/g, (_, i) => blocks[+i]);
+
+      // Runtime Patcher
+      const rt = `(function(){
+        var R=window.__R__;var _V="http://vfs.local/";
+        Object.defineProperty(Document.prototype,'URL',{get:function(){return _V;},configurable:true});
+        Object.defineProperty(Document.prototype,'baseURI',{get:function(){return _V;},configurable:true});
+        var _URL=URL;URL=function(u,b){if(b!==undefined){if(typeof b==='string'&&(b.startsWith('blob:')||b.startsWith('about:')))b=_V;try{return new _URL(u,b);}catch(e){try{return new _URL(u,_V);}catch(e2){return{href:String(u),pathname:'/'+String(u),protocol:'http:',hostname:'vfs.local',origin:_V};}}}else{try{return new _URL(u);}catch(e){return{href:String(u),pathname:'/'+String(u),protocol:'http:',hostname:'vfs.local',origin:_V};}}};URL.createObjectURL=_URL.createObjectURL;URL.revokeObjectURL=_URL.revokeObjectURL;URL.prototype=_URL.prototype;
+        var _f=fetch;fetch=function(i,n){var u=i instanceof Request?i.url:i;var r=R(u);return i instanceof Request?_f(new Request(r,i),n):_f(r,n);};
+        var _X=XMLHttpRequest;XMLHttpRequest=function(){var x=new _X,o=x.open;x.open=function(m,u){return o.call(this,m,R(u))};return x;};
+        var _sa=Element.prototype.setAttribute;Element.prototype.setAttribute=function(n,v){return _sa.call(this,n,['src','href','data'].indexOf(n)!==-1?R(v):v);};
+        var pp=function(p,c){var d=Object.getOwnPropertyDescriptor(c.prototype,p);if(!d)return;Object.defineProperty(c.prototype,p,{set:function(v){d.set.call(this,R(v));},get:d.get,configurable:true});};
+        [HTMLScriptElement,HTMLImageElement,HTMLLinkElement,HTMLIFrameElement,HTMLSourceElement,HTMLVideoElement,HTMLAudioElement].forEach(function(c){if(c)pp('src',c);});
+        if(HTMLLinkElement)pp('href',HTMLLinkElement);if(HTMLObjectElement)pp('data',HTMLObjectElement);
+        if(window.Audio){var _A=Audio;Audio=function(s){return s?new _A(R(s)):new _A();};Audio.prototype=_A.prototype;}
+        if(window.Worker){var _W=Worker;Worker=function(u,o){var r=R(u);if(r.startsWith('blob:')){var M=\${JSON.stringify(imap.imports)};var _rmW=\${JSON.stringify([...revMap].filter(e => /\.(m?js|wasm)\$/i.test(e[1])))};var code='var M='+JSON.stringify(M)+';var _rmW=new Map('+JSON.stringify(_rmW)+');var _URL=URL;URL=function(u,b){if(b!==undefined){if(typeof b==="string"&&(b.startsWith("blob:")||b.startsWith("about:")))b="http://vfs.local/";try{return new _URL(u,b);}catch(e){try{return new _URL(u,"http://vfs.local/");}catch(e2){return{href:String(u),pathname:"/"+String(u),protocol:"http:",hostname:"vfs.local",origin:"http://vfs.local/";}}}else{try{return new _URL(u);}catch(e){return{href:String(u),pathname:"/"+String(u),protocol:"http:",hostname:"vfs.local",origin:"http://vfs.local/";}}}};URL.createObjectURL=_URL.createObjectURL;URL.revokeObjectURL=_URL.revokeObjectURL;URL.prototype=_URL.prototype;function _r(u){if(!u||u.startsWith("blob:")||u.startsWith("data:"))return u;try{var p=new URL(u,"http://vfs.local/");var s=decodeURIComponent(p.pathname);if(s.startsWith("/"))s=s.substring(1);if(M[s])return M[s];var f=s.split("/").pop();for(var k in M)if(k.endsWith("/"+f)||k===f)return M[k];}catch(e){}return u;}var _i=importScripts;importScripts=function(){_i.apply(null,[].slice.call(arguments).map(_r));};var _wf=fetch;fetch=function(i,n){var u=i instanceof Request?i.url:i;var r=_r(u);return i instanceof Request?_wf(new Request(r,i),n):_wf(r,n);};_i("'+r+'");';return new _W(URL.createObjectURL(new Blob([code],{type:'application/javascript'})),o);}return new _W(r,o);};}
+        var _dw=document.write,_dwl=document.writeln;var _ps=function(s){if(typeof s!=='string')return s;return s.replace(/((?:src|href|data)\\\\s*=\\\\s*["'])([^"']+)(["'])/gi,function(_,pre,url,post){var r=R(url);return r!==url?pre+r+post:_;});};document.write=function(){return _dw.apply(document,[].slice.call(arguments).map(_ps));};document.writeln=function(){return _dwl.apply(document,[].slice.call(arguments).map(_ps));};
+        var _pe=function(n){if(n.nodeType!==1)return;['src','href','data'].forEach(function(a){if(n.hasAttribute(a)){var o=n.getAttribute(a),r=R(o);if(r!==o)n.setAttribute(a,r);}});};
+        new MutationObserver(function(ms){ms.forEach(function(m){m.addedNodes.forEach(function(n){_pe(n);if(n.querySelectorAll)n.querySelectorAll('[src],[href],[data]').forEach(_pe);});});}).observe(document.documentElement,{childList:true,subtree:true});
+        var _ru=function(s){return typeof s!=='string'?s:s.replace(/url\\\\(\\\\s*["']?([^"')]*)["']?\\\\s*\\\\)/gi,function(m,u){var r=R(u);return r!==u?'url("'+r+'")':m;});};
+        var _sp=CSSStyleDeclaration.prototype.setProperty;CSSStyleDeclaration.prototype.setProperty=function(p,v,pr){return _sp.call(this,p,_ru(v),pr);};
+        var _cs=Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype,'cssText');if(_cs){Object.defineProperty(CSSStyleDeclaration.prototype,'cssText',{set:function(v){_cs.set.call(this,_ru(v));},get:_cs.get,configurable:true});}
+      })();`;
+
+      const inject = '<script type="importmap">' + JSON.stringify(imap) + '</' + 'script><script>' + rt + '</' + 'script>';
+      const hi = parsedHtml.toLowerCase().indexOf('<head>');
+      const finalHtml = hi !== -1 ? parsedHtml.slice(0, hi + 6) + inject + parsedHtml.slice(hi + 6) : inject + parsedHtml;
+      
+      document.open();
+      document.write(finalHtml);
+      document.close();
+    }.toString() + ' init();';
+
+    // ── Compiler Core ───────────────────────────────────────────────────────────
+    document.getElementById('btn').onclick = async () => {
+      const fIn = document.getElementById('fIn');
+      const files = Array.from(fIn.files).filter(f => !f.webkitRelativePath.includes('__MACOSX') && !f.name.endsWith('.DS_Store'));
+      if (!files.length) return alert('Select a folder');
+
+      // 1. Construct Flat Binary VFS
+      const chunks = [];
+      for (const file of files) {
+        const path = file.webkitRelativePath || file.name;
+        const pathBytes = new TextEncoder().encode(path);
+        const dataBytes = new Uint8Array(await file.arrayBuffer());
+        const header = new Uint8Array(8);
+        new DataView(header.buffer).setUint32(0, pathBytes.length, true);
+        new DataView(header.buffer).setUint32(4, dataBytes.length, true);
+        chunks.push(header, pathBytes, dataBytes);
+      }
+
+      // 2. Native Compression
+      const uncmpBlob = new Blob(chunks);
+      const cs = new CompressionStream('gzip');
+      const compressedStream = uncmpBlob.stream().pipeThrough(cs);
+      const compressedBytes = new Uint8Array(await new Response(compressedStream).arrayBuffer());
+
+      // 3. Base122 Encode for HTML Embedding
+      const payload = B122.enc(compressedBytes);
+      let payloadStr = new TextDecoder().decode(payload);
+      // Prevent accidental script tag breakout inside the embedded string
+      payloadStr = payloadStr.replace(/<\/script>/gi, '<\\/script>');
+
+      // 4. Generate Self-Contained HTML
+      // Note: We use <\/script> so the compiler's HTML parser doesn't break early
+      const runnerHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>App</title>
+  <script type="text/plain" id="vfs_data">${payloadStr}<\/script>
+</head>
+<body>
+  <script>
+    ${runnerLogic}
+  <\/script>
+</body>
+</html>`;
+
+      // 5. Trigger Download
+      const blob = new Blob([runnerHTML], { type: 'text/html' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = (files[0].webkitRelativePath.split('/')[0] || 'app') + '.html';
+      a.click();
+    };
+  </script>
+</body>
+</html>
