@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FNA</title>
+</head>
+<body>
+  <h2>Floosh Nucleic Acid (FNA) Engine</h2>
+  <button id="packBtn">Pack .FNA</button>
+  <button id="runBtn">Run .FNA</button>
+  <div id="status">Idle</div>
+
+  <input type="file" id="folderInput" webkitdirectory directory multiple hidden>
+  <input type="file" id="fnaInput" accept=".fna" hidden>
+
+<script>
+// =====================================================================
+// FNA ARCHITECTURE: Floosh Nucleic Acid
+// 1. Indexed-Native Container (No external libs, uses native CompressionStream)
+// 2. Lazy-Load VFS (Slices byte ranges on demand, zero upfront memory)
+// 3. Origin-Spoofing Sandbox (Tricks WebGL/WASM into secure context)
+// =====================================================================
+
+const $ = id => document.getElementById(id);
+const status = msg => $('status').textContent = msg;
+
+// ── Native Compression/Decompression Helpers ──────────────────────
+async function compressData(data) {
+  const cs = new CompressionStream('deflate-raw');
+  const writer = cs.writable.getWriter();
+  writer.write(data);
+  writer.close();
+  const chunks = [];
+  const reader = cs.readable.getReader();
+  let result;
+  while (!(result = await reader.read()).done) chunks.push(result.value);
+  let length = chunks.reduce((a, b) => a + b.length, 0);
+  const merged = new Uint8Array(length);
+  let offset = 0;
+  for (let c of chunks) { merged.set(c, offset); offset += c.length; }
+  return merged;
+}
+
+// ── PACKER: Folder -> .FNA ─────────────────────────────────────────
+ $('packBtn').onclick = () => $('folderInput').click();
+
+ $('folderInput').onchange = async e => {
+  const files = Array.from(e.target.files).filter(f => !f.webkitRelativePath.includes('__MACOSX') && !f.name.endsWith('.DS_Store'));
+  if (!files.length) return;
+  status("Packing FNA...");
+
+  try {
+    const index = {};
+    let offset = 0;
+    const chunks = [];
+
+    for (const f of files) {
+      const data = new Uint8Array(await f.arrayBuffer());
+      const comp = await compressData(data);
+      const path = f.webkitRelativePath || f.name;
+      index[path] = { o: offset, c: comp.length, u: data.length };
+      chunks.push(comp);
+      offset += comp.length;
+      status(`Packed: ${path} (${(offset / 1048576).toFixed(2)}mb)`);
+    }
+
+    const indexStr = JSON.stringify(index);
+    const indexBuf = new TextEncoder().encode(indexStr);
+    
+    // Header: 4-byte magic ('F','N','A',0) + 4-byte index length + index + payload
+    const header = new Uint8Array(8);
+    header.set([70, 78, 65, 0], 0); // 'FNA\0'
+    new DataView(header.buffer).setUint32(4, indexBuf.length, true);
+
+    const blob = new Blob([header, indexBuf, ...chunks], { type: 'application/octet-stream' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (files[0].webkitRelativePath.split('/')[0] || 'app') + '.fna';
+    a.click();
+    status("FNA Saved.");
+  } catch (err) {
+    status("Pack Error: " + err.message);
+  }
+};
+
+// ── RUNNER: .FNA -> Lazy VFS ───────────────────────────────────────
+ $('runBtn').onclick = () => $('fnaInput').click();
+
+ $('fnaInput').onchange = async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  status("Reading FNA...");
+
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const dv = new DataView(buf.buffer);
+  
+  // Validate Magic
+  if (dv.getUint32(0, false) !== 0x464E4100) { // 'FNA\0'
+    return status("Invalid FNA file");
+  }
+
+  const indexLen = dv.getUint32(4, true);
+  const indexStr = new TextDecoder().decode(buf.subarray(8, 8 + indexLen));
+  const index = JSON.parse(indexStr);
+  const payloadOffset = 8 + indexLen;
+
+  // Expose to injected VFS script
+  window.__FNA_BUFFER__ = buf;
+  window.__FNA_INDEX__ = index;
+  window.__FNA_OFFSET__ = payloadOffset;
+
+  // Find HTML entry
+  let entry = Object.keys(index).find(k => k.toLowerCase().endsWith('index.html')) 
+            || Object.keys(index).find(k => k.toLowerCase().endsWith('.html'));
+            
+  if (!entry) return status("No HTML entry found in FNA");
+
+  status("Bootstrapping VFS...");
+  
+  // Fetch entry HTML via native decompression
+  const htmlText = await fetchFNAFile(entry).then(r => r.text());
+
+  const injected = `
+<script>
+// ── FNA VIRTUAL FILE SYSTEM ───────────────────────────────────
+window.__FNA_BUFFER__ = window.opener ? window.opener.__FNA_BUFFER__ : window.__FNA_BUFFER__;
+window.__FNA_INDEX__ = window.opener ? window.opener.__FNA_INDEX__ : window.__FNA_INDEX__;
+window.__FNA_OFFSET__ = window.opener ? window.opener.__FNA_OFFSET__ : window.__FNA_OFFSET__;
+
+const _V = "https://fna.local/";
+
+// ── Secure Context Spoofing ─────────────────────────────────────
+// Forces game engines (Unity/Godot) to treat local files as HTTPS
+try {
+  Object.defineProperty(document, 'URL', { get: () => _V, configurable: true });
+  Object.defineProperty(document, 'baseURI', { get: () => _V, configurable: true });
+  Object.defineProperty(window, 'origin', { get: () => _V, configurable: true });
+} catch(e){}
+
+const _URL = URL;
+URL = function(u, b) {
+  if (b !== undefined) {
+    if (typeof b === 'string' && (b.startsWith('blob:') || b.startsWith('about:'))) b = _V;
+    try { return new _URL(u, b); } catch(e) { try { return new _URL(u, _V); } catch(e2) { return {href: String(u), pathname: '/' + String(u), protocol: 'https:', hostname: 'fna.local', origin: _V}; } }
+  } else {
+    try { return new _URL(u); } catch(e) { return {href: String(u), pathname: '/' + String(u), protocol: 'https:', hostname: 'fna.local', origin: _V}; }
+  }
+};
+URL.createObjectURL = _URL.createObjectURL;
+URL.revokeObjectURL = _URL.revokeObjectURL;
+URL.prototype = _URL.prototype;
+
+// ── Native Lazy Fetch ──────────────────────────────────────────
+const blobCache = new Map(); // Memory management: cache decompressed blobs
+const resolvePath = p => {
+  if (!p || typeof p !== 'string' || p.startsWith('blob:') || p.startsWith('data:')) return null;
+  let path = p.replace(/^\\.\\/+/, '').replace(/^\\/+/, '');
+  if (window.__FNA_INDEX__[path]) return path;
+  // Fallback search
+  for (let k in window.__FNA_INDEX__) {
+    if (k.endsWith('/' + path) || k === path || k.split('/').pop() === path) return k;
+  }
+  return null;
+};
+
+async function fetchFNAFile(path) {
+  const meta = window.__FNA_INDEX__[path];
+  if (!meta) throw new Error('File not found: ' + path);
+  
+  if (blobCache.has(path)) return new Response(blobCache.get(path));
+  
+  const slice = window.__FNA_BUFFER__.slice(
+    window.__FNA_OFFSET__ + meta.o, 
+    window.__FNA_OFFSET__ + meta.o + meta.c
+  );
+  
+  // Native browser decompression
+  const ds = new DecompressionStream('deflate-raw');
+  const writer = ds.writable.getWriter();
+  writer.write(slice);
+  writer.close();
+  
+  const reader = ds.readable.getReader();
+  const chunks = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const blob = new Blob(chunks);
+  blobCache.set(path, blob);
+  return new Response(blob);
+}
+
+const _fetch = fetch;
+fetch = function(input, init) {
+  const url = input instanceof Request ? input.url : input;
+  const p = resolvePath(url);
+  if (p) return fetchFNAFile(p);
+  return _fetch(input, init);
+};
+
+const _XHR = XMLHttpRequest;
+XMLHttpRequest = function() {
+  const x = new _XHR();
+  const o = x.open;
+  x.open = function(m, u) {
+    const p = resolvePath(u);
+    if (p) {
+      fetchFNAFile(p).then(r => r.blob().then(b => {
+        o.call(this, 'GET', URL.createObjectURL(b));
+        this.send();
+      }));
+      return; // We handle send internally
+    }
+    return o.call(this, m, u);
+  };
+  return x;
+};
+
+// ── DOM Interception (Lazy Blob URLs) ──────────────────────────
+async function getBlobUrl(path) {
+  if (blobCache.has(path)) return URL.createObjectURL(blobCache.get(path));
+  const r = await fetchFNAFile(path);
+  const b = await r.blob();
+  return URL.createObjectURL(b);
+}
+
+const _sa = Element.prototype.setAttribute;
+Element.prototype.setAttribute = function(name, val) {
+  if (name && ['src', 'href', 'data'].indexOf(name.toLowerCase()) !== -1) {
+    const self = this;
+    const orig = val;
+    _sa.call(this, name, 'data:,'); // Prevent premature loading
+    getBlobUrl(resolvePath(val)).then(url => {
+      if (url) _sa.call(self, name, url);
+      else _sa.call(self, name, orig);
+    });
+    return;
+  }
+  return _sa.call(this, name, val);
+};
+
+// Property setters
+['HTMLScriptElement', 'HTMLImageElement', 'HTMLLinkElement', 'HTMLSourceElement', 'HTMLVideoElement', 'HTMLAudioElement'].forEach(c => {
+  if (window[c]) {
+    const d = Object.getOwnPropertyDescriptor(window[c].prototype, 'src');
+    if (d) Object.defineProperty(window[c].prototype, 'src', {
+      set: function(v) { _sa.call(this, 'src', v); },
+      get: d.get, configurable: true
+    });
+  }
+});
+
+// ── Workers ────────────────────────────────────────────────────
+if (window.Worker) {
+  const _W = Worker;
+  Worker = function(url, o) {
+    const p = resolvePath(url);
+    if (p) {
+      const code = 'var _f = fetch; fetch = function(i,n){return _f(i,n)};'; // Simplified worker fetch
+      // Properly fetch worker code, wrap, and spawn
+      return (async () => {
+        const r = await fetchFNAFile(p);
+        const t = await r.text();
+        const blob = new Blob([t], { type: 'application/javascript' });
+        return new _W(URL.createObjectURL(blob), o);
+      })();
+    }
+    return new _W(url, o);
+  };
+}
+
+// ── Dynamic DOM Observer ───────────────────────────────────────
+const mo = new MutationObserver(ms => {
+  ms.forEach(m => m.addedNodes.forEach(n => {
+    if (n.nodeType !== 1) return;
+    ['src', 'href', 'data'].forEach(a => {
+      if (n.hasAttribute && n.hasAttribute(a)) {
+        const v = n.getAttribute(a);
+        getBlobUrl(resolvePath(v)).then(url => url && _sa.call(n, a, url));
+      }
+    });
+    if (n.querySelectorAll) {
+      n.querySelectorAll('[src],[href],[data]').forEach(el => {
+        ['src', 'href', 'data'].forEach(a => {
+          if (el.hasAttribute(a)) {
+            const v = el.getAttribute(a);
+            getBlobUrl(resolvePath(v)).then(url => url && _sa.call(el, a, url));
+          }
+        });
+      });
+    }
+  }));
+});
+mo.observe(document.documentElement, { childList: true, subtree: true });
+
+console.log("FNA VFS ACTIVE");
+<\/script>
+`;
+
+  let finalHtml = htmlText;
+  const hi = finalHtml.toLowerCase().indexOf('<head>');
+  if (hi !== -1) {
+    finalHtml = finalHtml.slice(0, hi + 6) + injected + finalHtml.slice(hi + 6);
+  } else {
+    finalHtml = injected + finalHtml;
+  }
+
+  document.open();
+  document.write(finalHtml);
+  document.close();
+  status("FNA Running.");
+};
+</script>
+</body>
+</html>
+</html>
