@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -90,6 +89,9 @@ transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 background-size: cover;
 background-position: center;
 box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+display: flex;
+align-items: center;
+justify-content: center;
 }
 
 .tile.selected {
@@ -110,10 +112,11 @@ z-index: 100;
 display: block;
 }
 
-#runtime-container iframe, #runtime-container #game {
+#runtime-container iframe {
 width: 100%;
 height: 100%;
 border: none;
+background: #000;
 }
 
 .placeholder {
@@ -125,6 +128,7 @@ justify-content: center;
 font-size: 0.8rem;
 color: #555;
 text-align: center;
+word-break: break-all;
 }
 </style>
 
@@ -143,8 +147,10 @@ text-align: center;
 
 <input type="file" id="folderInput" webkitdirectory directory multiple hidden>
 
-<script>
-// ── Base122 codec (for .JAM format) ──────────────────────────────
+<!-- JAM Runner Script Template (Isolated in an iframe) -->
+<script type="text/plain" id="fjam-code">
+import * as fflate from 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm';
+
 const B122=(()=>{const I=[0,10,13,34,38,92],IM=new Int8Array(128).fill(-1);
 I.forEach((v,i)=>IM[v]=i);
 return{
@@ -168,7 +174,6 @@ else{ba=(ba<<7)|c;if((bl+=7)>=8)o[oi++]=(ba>>>(bl-=8))&0xFF;}}
 return o.subarray(0,oi);}
 }})();
 
-// ── MIME lookup ──────────────────────────────────────────────────
 const MIME={html:'text/html',htm:'text/html',css:'text/css',txt:'text/plain',
 js:'application/javascript',mjs:'application/javascript',json:'application/json',wasm:'application/wasm',
 png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',svg:'image/svg+xml',webp:'image/webp',ico:'image/x-icon',bmp:'image/bmp',
@@ -182,6 +187,140 @@ const mime=p=>{let l=p.toLowerCase().replace(/\.part\d+$/,'');
 if(l.endsWith('.wasm.code.unityweb')||l.endsWith('.wasm.framework.unityweb'))return'application/wasm';
 return MIME[l.split('.').pop()]||'application/octet-stream';};
 
+window.addEventListener('message', async (e) => {
+if (e.data.type === 'run_jam' && e.data.file) {
+await openJam(e.data.file);
+}
+});
+
+async function openJam(file) {
+try {
+let buf = await file.arrayBuffer(), v = new DataView(buf);
+if (v.getUint32(0, false) !== 0x4A414D00) throw new Error("Invalid JAM");
+const zip = B122.dec(new Uint8Array(buf, 8, v.getUint32(4, true)));
+buf = null;
+const unz = fflate.unzipSync(zip);
+
+const urlMap = new Map(), revMap = new Map();
+const imap = { imports: {} };
+const baseDirGuess = Object.keys(unz).find(k => k.toLowerCase().endsWith('index.html')) || Object.keys(unz).find(k => k.toLowerCase().endsWith('.html')) || '';
+const base = baseDirGuess.includes('/') ? baseDirGuess.substring(0, baseDirGuess.lastIndexOf('/') + 1) : '';
+
+for (const p in unz) {
+if (p.endsWith('/') || p.includes('__MACOSX') || p.endsWith('.DS_Store')) continue;
+const cp = p.replace(/\\/g, '/').replace(/^\/+/, ''), type = mime(cp);
+const url = URL.createObjectURL(new Blob([unz[p]], { type }));
+revMap.set(url, cp);
+urlMap.set(cp, url); urlMap.set('/' + cp, url); urlMap.set('./' + cp, url);
+if (cp.startsWith(base)) {
+const rel = cp.substring(base.length);
+urlMap.set(rel, url); urlMap.set('/' + rel, url); urlMap.set('./' + rel, url);
+urlMap.set(rel + '.part1', url);
+}
+const fn = cp.split('/').pop();
+urlMap.set(fn, url); urlMap.set('./' + fn, url); urlMap.set('/' + fn, url);
+urlMap.set(cp + '.part1', url); urlMap.set(fn + '.part1', url);
+if (/\.(m?js|wasm)$/i.test(cp)) {
+imap.imports[cp] = url; imap.imports['/' + cp] = url; imap.imports['./' + cp] = url;
+if (!imap.imports[fn]) {
+imap.imports[fn] = url; imap.imports['./' + fn] = url; imap.imports['/' + fn] = url;
+}
+}
+unz[p] = null;
+}
+boot(urlMap, revMap, imap, base);
+} catch(e) { console.error(e); }
+}
+
+function boot(urlMap, revMap, imap, base) {
+const entry = [...urlMap.keys()].find(k => k.toLowerCase().endsWith('index.html')) || [...urlMap.keys()].find(k => k.toLowerCase().endsWith('.html'));
+if (!entry) return;
+
+const R = url => {
+if (!url || typeof url !== 'string' || url.startsWith('blob:') || url.startsWith('data:')) return url;
+if (urlMap.has(url)) return urlMap.get(url);
+try {
+const u = new URL(url, "http://vfs.local/");
+if (u.hostname !== 'vfs.local' && u.hostname !== location.hostname && u.hostname !== '') return url;
+let p = decodeURIComponent(u.pathname).replace(/[?#].*$/, '');
+if (p.startsWith('/')) p = p.substring(1);
+if (urlMap.has(p)) return urlMap.get(p);
+const f = p.split('/').pop();
+if (urlMap.has(f)) return urlMap.get(f);
+} catch (e) {}
+return url;
+};
+
+window.__R__ = R;
+
+fetch(urlMap.get(entry)).then(r => r.text()).then(html => {
+const blocks = [];
+html = html.replace(/<script([^>]*)>([\s\S]*?)<\/script>/gi, (_, attrs, content) => {
+blocks.push(content);
+return '<script' + attrs + '>\x00B' + (blocks.length - 1) + '\x00<\/script>';
+});
+html = html.replace(/((?:src|href|data)\s*=\s*["'])([^"']+)(["'])/gi, (_, pre, url, post) => pre + R(url) + post);
+html = html.replace(/(url\(\s*["']?)([^"')]+)(["']?\s*\))/gi, (_, pre, url, post) => pre + R(url) + post);
+html = html.replace(/\x00B(\d+)\x00/g, (_, i) => blocks[+i]);
+
+const rt = `(function(){
+var R=window.__R__;
+var _V="http://vfs.local/";
+Object.defineProperty(Document.prototype,'URL',{get:function(){return _V;},configurable:true});
+Object.defineProperty(Document.prototype,'baseURI',{get:function(){return _V;},configurable:true});
+var _URL=URL;
+URL=function(u,b){
+if(b!==undefined){
+if(typeof b==='string'&&(b.startsWith('blob:')||b.startsWith('about:')))b=_V;
+try{return new _URL(u,b);}catch(e){try{return new _URL(u,_V);}catch(e2){return{href:String(u),pathname:'/'+String(u),protocol:'http:',hostname:'vfs.local',origin:_V};}}
+}else{
+try{return new _URL(u);}catch(e){return{href:String(u),pathname:'/'+String(u),protocol:'http:',hostname:'vfs.local',origin:_V};}}
+};
+URL.createObjectURL=_URL.createObjectURL;URL.revokeObjectURL=_URL.revokeObjectURL;
+URL.prototype=_URL.prototype;
+var _f=fetch;fetch=function(i,n){var u=i instanceof Request?i.url:i;var r=R(u);
+return i instanceof Request?_f(new Request(r,i),n):_f(r,n);};
+var _X=XMLHttpRequest;XMLHttpRequest=function(){var x=new _X,o=x.open;
+x.open=function(m,u){return o.call(this,m,R(u))};return x;};
+var _sa=Element.prototype.setAttribute;
+Element.prototype.setAttribute=function(n,v){return _sa.call(this,n,['src','href','data'].indexOf(n)!==-1?R(v):v);};
+var pp=function(p,c){var d=Object.getOwnPropertyDescriptor(c.prototype,p);if(!d)return;
+Object.defineProperty(c.prototype,p,{set:function(v){d.set.call(this,R(v));},get:d.get,configurable:true});};
+[HTMLScriptElement,HTMLImageElement,HTMLLinkElement,HTMLIFrameElement,HTMLSourceElement,HTMLVideoElement,HTMLAudioElement].forEach(function(c){if(c)pp('src',c);});
+if(HTMLLinkElement)pp('href',HTMLLinkElement);if(HTMLObjectElement)pp('data',HTMLObjectElement);
+if(window.Audio){var _A=Audio;Audio=function(s){return s?new _A(R(s)):new _A();};Audio.prototype=_A.prototype;}
+if(window.Worker){var _W=Worker;Worker=function(u,o){var r=R(u);
+if(r.startsWith('blob:')){var M=${JSON.stringify(imap.imports)};
+var _rmW=${JSON.stringify([...revMap].filter(e=>/\.(m?js|wasm)$/i.test(e[1])))};
+var code='var M='+JSON.stringify(M)+';var _rmW=new Map('+JSON.stringify(_rmW)+');var _URL=URL;URL=function(u,b){if(b!==undefined){if(typeof b==="string"&&(b.startsWith("blob:")||b.startsWith("about:")))b="http://vfs.local/";try{return new _URL(u,b);}catch(e){try{return new _URL(u,"http://vfs.local/");}catch(e2){return{href:String(u),pathname:"/"+String(u),protocol:"http:",hostname:"vfs.local",origin:"http://vfs.local/"};}}}else{try{return new _URL(u);}catch(e){return{href:String(u),pathname:"/"+String(u),protocol:"http:",hostname:"vfs.local",origin:"http://vfs.local/"};}}};URL.createObjectURL=_URL.createObjectURL;URL.revokeObjectURL=_URL.revokeObjectURL;URL.prototype=_URL.prototype;function _r(u){if(!u||u.startsWith("blob:")||u.startsWith("data:"))return u;try{var p=new URL(u,"http://vfs.local/");var s=decodeURIComponent(p.pathname);if(s.startsWith("/"))s=s.substring(1);if(M[s])return M[s];var f=s.split("/").pop();for(var k in M)if(k.endsWith("/"+f)||k===f)return M[k];}catch(e){}return u;}var _i=importScripts;importScripts=function(){_i.apply(null,[].slice.call(arguments).map(_r));};var _wf=fetch;fetch=function(i,n){var u=i instanceof Request?i.url:i;var r=_r(u);return i instanceof Request?_wf(new Request(r,i),n):_wf(r,n);};_i("'+r+'");';
+return new _W(URL.createObjectURL(new Blob([code],{type:'application/javascript'})),o);}
+return new _W(r,o);};}
+var _dw=document.write,_dwl=document.writeln;
+var _ps=function(s){if(typeof s!=='string')return s;
+return s.replace(/((?:src|href|data)\\s*=\\s*["'])([^"']+)(["'])/gi,function(_,pre,url,post){var r=R(url);return r!==url?pre+r+post:_;});};
+document.write=function(){return _dw.apply(document,[].slice.call(arguments).map(_ps));};
+document.writeln=function(){return _dwl.apply(document,[].slice.call(arguments).map(_ps));};
+var _pe=function(n){if(n.nodeType!==1)return;
+['src','href','data'].forEach(function(a){if(n.hasAttribute(a)){var o=n.getAttribute(a),r=R(o);if(r!==o)n.setAttribute(a,r);}});};
+new MutationObserver(function(ms){ms.forEach(function(m){m.addedNodes.forEach(function(n){
+_pe(n);if(n.querySelectorAll)n.querySelectorAll('[src],[href],[data]').forEach(_pe);});});})
+.observe(document.documentElement,{childList:true,subtree:true});
+var _ru=function(s){return typeof s!=='string'?s:s.replace(/url\\(\\s*["']?([^"')]+)["']?\\s*\\)/gi,function(m,u){var r=R(u);return r!==u?'url("'+r+'")':m;});};
+var _sp=CSSStyleDeclaration.prototype.setProperty;
+CSSStyleDeclaration.prototype.setProperty=function(p,v,pr){return _sp.call(this,p,_ru(v),pr);};
+var _cs=Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype,'cssText');
+if(_cs){Object.defineProperty(CSSStyleDeclaration.prototype,'cssText',{set:function(v){_cs.set.call(this,_ru(v));},get:_cs.get,configurable:true});}
+})();`;
+
+const inject = '<script type="importmap">' + JSON.stringify(imap) + '<\/script><script>' + rt + '<\/script>';
+const hi = html.toLowerCase().indexOf('<head>');
+const final = hi !== -1 ? html.slice(0, hi + 6) + inject + html.slice(hi + 6) : inject + html;
+document.open(); document.write(final); document.close();
+});
+}
+</script>
+
+<script>
 // ── Core App Logic ───────────────────────────────────────────────
 const ROM_MAP = {
 'nes': 'nes', 'fds': 'nes',
@@ -217,7 +356,7 @@ dropZone.classList.remove('over');
 const files = [];
 for (const item of Array.from(e.dataTransfer.items)) {
 const entry = item.webkitGetAsEntry?.();
-if (entry) await walk(entry, '', files);
+if (entry) await walk(entry, files);
 else if (item.getAsFile()) files.push(item.getAsFile());
 }
 processFiles(files);
@@ -225,68 +364,58 @@ processFiles(files);
 
 folderInput.addEventListener('change', e => processFiles(Array.from(e.target.files)));
 
-async function walk(entry, path, out) {
-if (entry.isFile) out.push(await new Promise(r => entry.file(f => out.push(f), r)));
+async function walk(entry, out) {
+if (entry.isFile) out.push(await new Promise(r => entry.file(r)));
 else if (entry.isDirectory) {
 const reader = entry.createReader();
 const entries = await new Promise(r => { let a=[]; const q=()=>reader.readEntries(b=>b.length?(a.push(...b),q()):r(a)); q(); });
-for (const e of entries) await walk(e, entry.fullPath, out);
+for (const e of entries) await walk(e, out);
 }
 }
 
 function processFiles(files) {
 if (!files.length) return;
-games = [];
+const tempGames = {};
 
 files.forEach(file => {
 const name = file.name.toLowerCase();
 const path = file.webkitRelativePath || file.name;
 
-if (name.endsWith('.ds_store') || path.includes('__macosx')) return;
+if (name.endsWith('.ds_store') || name.startsWith('.') || path.includes('__macosx')) return;
 
-if (name.endsWith('-bg.png')) {
-const baseName = name.slice(0, -7);
-games.push({ id: baseName, type: 'bg', file, url: URL.createObjectURL(file) });
-return;
-}
+let type = null, core = null, base = name;
 
-if (name.endsWith('.png')) {
-const baseName = name.slice(0, -4);
-games.push({ id: baseName, type: 'thumb', file, url: URL.createObjectURL(file) });
-return;
-}
-
-if (name.endsWith('.jam')) {
-const baseName = name.slice(0, -4);
-games.push({ id: baseName, type: 'jam', file, name: file.name });
-return;
-}
-
-if (name.endsWith('.swf')) {
-const baseName = name.slice(0, -4);
-games.push({ id: baseName, type: 'flash', file, name: file.name });
-return;
-}
-
+if (name.endsWith('-bg.png')) { type = 'bg'; base = name.slice(0, -7); }
+else if (name.endsWith('.png')) { type = 'thumb'; base = name.slice(0, -4); }
+else if (name.endsWith('.jam')) { type = 'jam'; base = name.slice(0, -4); }
+else if (name.endsWith('.swf')) { type = 'flash'; base = name.slice(0, -4); }
+else {
 const ext = name.split('.').pop();
-if (ROM_MAP[ext]) {
-const baseName = name.slice(0, -ext.length - 1);
-games.push({ id: baseName, type: 'emulator', core: ROM_MAP[ext], file, name: file.name });
+if (ROM_MAP[ext]) { type = 'emulator'; core = ROM_MAP[ext]; base = name.slice(0, -ext.length - 1); }
+}
+
+if (!type) return;
+
+if (!tempGames[base]) tempGames[base] = { id: base, runner: null, core: null, thumb: null, bg: null, file: null, name: base };
+
+if (type === 'jam' || type === 'flash' || type === 'emulator') {
+tempGames[base].runner = type;
+tempGames[base].core = core;
+tempGames[base].file = file;
+tempGames[base].name = file.name;
+} else if (type === 'thumb') {
+tempGames[base].thumb = URL.createObjectURL(file);
+} else if (type === 'bg') {
+tempGames[base].bg = URL.createObjectURL(file);
 }
 });
 
-// Merge by ID
-const merged = {};
-games.forEach(g => {
-if (!merged[g.id]) merged[g.id] = { id: g.id, runner: null, core: null, thumb: null, bg: null, file: null, name: g.name || g.id };
-if (g.type === 'jam') { merged[g.id].runner = 'jam'; merged[g.id].file = g.file; }
-else if (g.type === 'flash') { merged[g.id].runner = 'flash'; merged[g.id].file = g.file; }
-else if (g.type === 'emulator') { merged[g.id].runner = 'emulator'; merged[g.id].core = g.core; merged[g.id].file = g.file; }
-else if (g.type === 'thumb') merged[g.id].thumb = g.url;
-else if (g.type === 'bg') merged[g.id].bg = g.url;
-});
+games = Object.values(tempGames).filter(g => g.runner !== null);
 
-games = Object.values(merged).filter(g => g.runner !== null);
+// Sort alphabetically by ID
+games.sort((a, b) => a.id.localeCompare(b.id));
+// Stable sort: move games with thumbnails to the front
+games.sort((a, b) => (b.thumb ? 1 : 0) - (a.thumb ? 1 : 0));
 
 if (games.length > 0) {
 dropZone.style.display = 'none';
@@ -335,9 +464,7 @@ document.addEventListener('keydown', (e) => {
 if (games.length === 0) return;
 
 if (uiContainer.classList.contains('hidden')) {
-if (e.key === 'Escape') {
-exitGame();
-}
+if (e.key === 'Escape') exitGame();
 return;
 }
 
@@ -358,218 +485,60 @@ launchGame(games[selectedIndex]);
 function launchGame(game) {
 uiContainer.classList.add('hidden');
 runtimeContainer.classList.add('active');
-runtimeContainer.innerHTML = '';
+runtimeContainer.innerHTML = ''; // Clear previous game state (isolates EmulatorJS/JAM perfectly)
+
+const iframe = document.createElement('iframe');
+iframe.setAttribute('allow', 'autoplay; fullscreen; gamepad; cross-origin-isolated');
+runtimeContainer.appendChild(iframe);
 
 if (game.runner === 'jam') {
-runJam(game.file);
+runJam(iframe, game.file);
 } else if (game.runner === 'flash') {
-runFlash(game.file);
+runFlash(iframe, game.file);
 } else if (game.runner === 'emulator') {
-runEmulator(game.file, game.core);
+runEmulator(iframe, game.file, game.core);
 }
 }
 
 function exitGame() {
 uiContainer.classList.remove('hidden');
 runtimeContainer.classList.remove('active');
-runtimeContainer.innerHTML = '';
+runtimeContainer.innerHTML = ''; // Nuke the iframe to kill all game processes
 }
 
 // ── Runners ──────────────────────────────────────────────────────
 
-async function runFlash(file) {
-if (!window.RufflePlayer) {
-await new Promise((resolve) => {
-const script = document.createElement('script');
-script.src = "https://unpkg.com/@ruffle-rs/ruffle";
-script.onload = resolve;
-document.head.appendChild(script);
-});
+function runJam(iframe, file) {
+const fjamCode = document.getElementById('fjam-code').textContent;
+iframe.srcdoc = `<html><head><style>*{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000}</style></head><body><script type="module">${fjamCode}<\/script></body></html>`;
+iframe.onload = () => {
+iframe.contentWindow.postMessage({ type: 'run_jam', file: file }, '*');
+};
 }
+
+function runFlash(iframe, file) {
+const swfUrl = URL.createObjectURL(file);
+iframe.srcdoc = `
+<html><head><style>*{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000}#ruffle{width:100%;height:100%}</style></head>
+<body><div id="ruffle"></div>
+<script src="https://unpkg.com/@ruffle-rs/ruffle"></script>
+<script>
 window.RufflePlayer = window.RufflePlayer || {};
 window.RufflePlayer.config = { "autoplay": "on", "unmuteOverlay": "visible" };
-const player = window.RufflePlayer.newest();
-const ruffle = player.create_player();
-runtimeContainer.appendChild(ruffle);
-ruffle.style.width = '100%';
-ruffle.style.height = '100%';
-ruffle.load({ url: URL.createObjectURL(file) });
-}
-
-function runEmulator(file, core) {
-runtimeContainer.innerHTML = '<div id="game"></div>';
-
-window.EJS_player = '#game';
-window.EJS_core = core;
-window.EJS_gameUrl = URL.createObjectURL(file);
-window.EJS_patUrl = '';
-window.EJS_startOnLoaded = true;
-
-const script = document.createElement('script');
-script.src = 'https://cdn.emulatorjs.org/latest/data/loader.js';
-document.body.appendChild(script);
-}
-
-function runJam(file) {
-const iframe = document.createElement('iframe');
-iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-pointer-lock allow-forms allow-popups');
-runtimeContainer.appendChild(iframe);
-
-const fjamCode = `
-import * as fflate from 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm';
-
-// Base122 Decoder
-const B122 = ${B122.toString()};
-
-// MIME
-${mime.toString()}
-
-window.addEventListener('message', async (e) => {
-if (e.data.type === 'run_jam' && e.data.file) {
-await openJam(e.data.file);
-}
+window.addEventListener('load', () => {
+const r = window.RufflePlayer.newest();
+const p = r.create_player();
+document.getElementById('ruffle').appendChild(p);
+p.load({ url: '${swfUrl}' });
 });
-
-async function openJam(file) {
-try {
-let buf = await file.arrayBuffer(), v = new DataView(buf);
-if (v.getUint32(0, false) !== 0x4A414D00) throw new Error("Invalid JAM");
-const zip = B122.dec(new Uint8Array(buf, 8, v.getUint32(4, true)));
-buf = null;
-const unz = fflate.unzipSync(zip);
-
-const urlMap = new Map(), revMap = new Map();
-const imap = { imports: {} };
-const baseDirGuess = Object.keys(unz).find(k => k.toLowerCase().endsWith('index.html')) || Object.keys(unz).find(k => k.toLowerCase().endsWith('.html')) || '';
-const base = baseDirGuess.includes('/') ? baseDirGuess.substring(0, baseDirGuess.lastIndexOf('/') + 1) : '';
-
-for (const p in unz) {
-if (p.endsWith('/') || p.includes('__MACOSX') || p.endsWith('.DS_Store')) continue;
-const cp = p.replace(/\\\\/g, '/').replace(/^\\/+/, ''), type = mime(cp);
-const url = URL.createObjectURL(new Blob([unz[p]], { type }));
-revMap.set(url, cp);
-urlMap.set(cp, url); urlMap.set('/' + cp, url); urlMap.set('./' + cp, url);
-if (cp.startsWith(base)) {
-const rel = cp.substring(base.length);
-urlMap.set(rel, url); urlMap.set('/' + rel, url); urlMap.set('./' + rel, url);
-urlMap.set(rel + '.part1', url);
-}
-const fn = cp.split('/').pop();
-urlMap.set(fn, url); urlMap.set('./' + fn, url); urlMap.set('/' + fn, url);
-urlMap.set(cp + '.part1', url); urlMap.set(fn + '.part1', url);
-if (/\\.(m?js|wasm)$/i.test(cp)) {
-imap.imports[cp] = url; imap.imports['/' + cp] = url; imap.imports['./' + cp] = url;
-if (!imap.imports[fn]) {
-imap.imports[fn] = url; imap.imports['./' + fn] = url; imap.imports['/' + fn] = url;
-}
-}
-unz[p] = null;
-}
-boot(urlMap, revMap, imap, base);
-} catch(e) { console.error(e); }
-}
-
-function boot(urlMap, revMap, imap, base) {
-const entry = [...urlMap.keys()].find(k => k.toLowerCase().endsWith('index.html')) || [...urlMap.keys()].find(k => k.toLowerCase().endsWith('.html'));
-if (!entry) return;
-
-const R = url => {
-if (!url || typeof url !== 'string' || url.startsWith('blob:') || url.startsWith('data:')) return url;
-if (urlMap.has(url)) return urlMap.get(url);
-try {
-const u = new URL(url, "http://vfs.local/");
-if (u.hostname !== 'vfs.local' && u.hostname !== location.hostname && u.hostname !== '') return url;
-let p = decodeURIComponent(u.pathname).replace(/[?#].*$/, '');
-if (p.startsWith('/')) p = p.substring(1);
-if (urlMap.has(p)) return urlMap.get(p);
-const f = p.split('/').pop();
-if (urlMap.has(f)) return urlMap.get(f);
-} catch (e) {}
-return url;
-};
-
-window.__R__ = R;
-
-fetch(urlMap.get(entry)).then(r => r.text()).then(html => {
-const blocks = [];
-html = html.replace(/<script([^>]*)>([\\s\\S]*?)<\\/script>/gi, (_, attrs, content) => {
-blocks.push(content);
-return '<script' + attrs + '>\\x00B' + (blocks.length - 1) + '\\x00<\\/' + 'script>';
-});
-html = html.replace(/((?:src|href|data)\\s*=\\s*["'])([^"']+)(["'])/gi, (_, pre, url, post) => pre + R(url) + post);
-html = html.replace(/(url\\(\\s*["']?)([^"')]+)(["']?\\s*\\))/gi, (_, pre, url, post) => pre + R(url) + post);
-html = html.replace(/\\x00B(\\d+)\\x00/g, (_, i) => blocks[+i]);
-
-const rt = \`(function(){
-var R=window.__R__;
-var _V="http://vfs.local/";
-Object.defineProperty(Document.prototype,'URL',{get:function(){return _V;},configurable:true});
-Object.defineProperty(Document.prototype,'baseURI',{get:function(){return _V;},configurable:true});
-var _URL=URL;
-URL=function(u,b){
-if(b!==undefined){
-if(typeof b==='string'&&(b.startsWith('blob:')||b.startsWith('about:')))b=_V;
-try{return new _URL(u,b);}catch(e){try{return new _URL(u,_V);}catch(e2){return{href:String(u),pathname:'/'+String(u),protocol:'http:',hostname:'vfs.local',origin:_V};}}
-}else{
-try{return new _URL(u);}catch(e){return{href:String(u),pathname:'/'+String(u),protocol:'http:',hostname:'vfs.local',origin:_V};}}
-};
-URL.createObjectURL=_URL.createObjectURL;URL.revokeObjectURL=_URL.revokeObjectURL;
-URL.prototype=_URL.prototype;
-var _f=fetch;fetch=function(i,n){var u=i instanceof Request?i.url:i;var r=R(u);
-return i instanceof Request?_f(new Request(r,i),n):_f(r,n);};
-var _X=XMLHttpRequest;XMLHttpRequest=function(){var x=new _X,o=x.open;
-x.open=function(m,u){return o.call(this,m,R(u))};return x;};
-var _sa=Element.prototype.setAttribute;
-Element.prototype.setAttribute=function(n,v){return _sa.call(this,n,['src','href','data'].indexOf(n)!==-1?R(v):v);};
-var pp=function(p,c){var d=Object.getOwnPropertyDescriptor(c.prototype,p);if(!d)return;
-Object.defineProperty(c.prototype,p,{set:function(v){d.set.call(this,R(v));},get:d.get,configurable:true});};
-[HTMLScriptElement,HTMLImageElement,HTMLLinkElement,HTMLIFrameElement,HTMLSourceElement,HTMLVideoElement,HTMLAudioElement].forEach(function(c){if(c)pp('src',c);});
-if(HTMLLinkElement)pp('href',HTMLLinkElement);if(HTMLObjectElement)pp('data',HTMLObjectElement);
-if(window.Audio){var _A=Audio;Audio=function(s){return s?new _A(R(s)):new _A();};Audio.prototype=_A.prototype;}
-if(window.Worker){var _W=Worker;Worker=function(u,o){var r=R(u);
-if(r.startsWith('blob:')){var M=\${JSON.stringify(imap.imports)};
-var _rmW=\${JSON.stringify([...revMap].filter(e=>/\\.(m?js|wasm)$/i.test(e[1])))};
-var code='var M='+JSON.stringify(M)+';var _rmW=new Map('+JSON.stringify(_rmW)+');var _URL=URL;URL=function(u,b){if(b!==undefined){if(typeof b==="string"&&(b.startsWith("blob:")||b.startsWith("about:")))b="http://vfs.local/";try{return new _URL(u,b);}catch(e){try{return new _URL(u,"http://vfs.local/");}catch(e2){return{href:String(u),pathname:"/"+String(u),protocol:"http:",hostname:"vfs.local",origin:"http://vfs.local/"};}}}else{try{return new _URL(u);}catch(e){return{href:String(u),pathname:"/"+String(u),protocol:"http:",hostname:"vfs.local",origin:"http://vfs.local/"};}}};URL.createObjectURL=_URL.createObjectURL;URL.revokeObjectURL=_URL.revokeObjectURL;URL.prototype=_URL.prototype;function _r(u){if(!u||u.startsWith("blob:")||u.startsWith("data:"))return u;try{var p=new URL(u,"http://vfs.local/");var s=decodeURIComponent(p.pathname);if(s.startsWith("/"))s=s.substring(1);if(M[s])return M[s];var f=s.split("/").pop();for(var k in M)if(k.endsWith("/"+f)||k===f)return M[k];}catch(e){}return u;}var _i=importScripts;importScripts=function(){_i.apply(null,[].slice.call(arguments).map(_r));};var _wf=fetch;fetch=function(i,n){var u=i instanceof Request?i.url:i;var r=_r(u);return i instanceof Request?_wf(new Request(r,i),n):_wf(r,n);};_i("'+r+'");';
-return new _W(URL.createObjectURL(new Blob([code],{type:'application/javascript'})),o);}
-return new _W(r,o);};}
-var _dw=document.write,_dwl=document.writeln;
-var _ps=function(s){if(typeof s!=='string')return s;
-return s.replace(/((?:src|href|data)\\\\s*=\\\\s*["'])([^"']+)(["'])/gi,function(_,pre,url,post){var r=R(url);return r!==url?pre+r+post:_;});};
-document.write=function(){return _dw.apply(document,[].slice.call(arguments).map(_ps));};
-document.writeln=function(){return _dwl.apply(document,[].slice.call(arguments).map(_ps));};
-var _pe=function(n){if(n.nodeType!==1)return;
-['src','href','data'].forEach(function(a){if(n.hasAttribute(a)){var o=n.getAttribute(a),r=R(o);if(r!==o)n.setAttribute(a,r);}});};
-new MutationObserver(function(ms){ms.forEach(function(m){m.addedNodes.forEach(function(n){
-_pe(n);if(n.querySelectorAll)n.querySelectorAll('[src],[href],[data]').forEach(_pe);});});})
-.observe(document.documentElement,{childList:true,subtree:true});
-var _ru=function(s){return typeof s!=='string'?s:s.replace(/url\\\\(\\\\s*["']?([^"')]+)["']?\\\\s*\\\\)/gi,function(m,u){var r=R(u);return r!==u?'url("'+r+'")':m;});};
-var _sp=CSSStyleDeclaration.prototype.setProperty;
-CSSStyleDeclaration.prototype.setProperty=function(p,v,pr){return _sp.call(this,p,_ru(v),pr);};
-var _cs=Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype,'cssText');
-if(_cs){Object.defineProperty(CSSStyleDeclaration.prototype,'cssText',{set:function(v){_cs.set.call(this,_ru(v));},get:_cs.get,configurable:true});}
-})();\`;
-
-const inject = '<script type="importmap">' + JSON.stringify(imap) + '<\\/' + 'script><script>' + rt + '<\\/' + 'script>';
-const hi = html.toLowerCase().indexOf('<head>');
-const final = hi !== -1 ? html.slice(0, hi + 6) + inject + html.slice(hi + 6) : inject + html;
-document.open(); document.write(final); document.close();
-});
-}
+<\/script>
+</body></html>
 `;
-
-const doc = iframe.contentWindow.document;
-doc.open();
-doc.write(`<html><head><style>*{margin:0;padding:0}</style></head><body><script type="module">${fjamCode}<\/script></body></html>`);
-doc.close();
-
-// Send the file to the iframe once it's ready
-const checkReady = setInterval(() => {
-if (iframe.contentWindow) {
-clearInterval(checkReady);
-// We can't pass File objects directly via postMessage in some cases, but it actually works for File objects
-iframe.contentWindow.postMessage({ type: 'run_jam', file: file }, '*');
 }
-}, 100);
+
+function runEmulator(iframe, file, core) {
+const romUrl = URL.createObjectURL(file);
+iframe.srcdoc = <html><head><style>*{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#000}#game{width:100%;height:100%}</style></head> <body><div id="game"></div> <script> window.EJS_player = '#game'; window.EJS_core = '${core}'; window.EJS_gameUrl = '${romUrl}'; window.EJS_patUrl = 'https://cdn.emulatorjs.org/latest/data/'; window.EJS_startOnLoaded = true; <\/script> <script src="https://cdn.emulatorjs.org/latest/data/loader.js"><\/script> </body></html> ;
 }
 </script>
 </body>
