@@ -1,0 +1,576 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arcade</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+height: 100vh;
+background: #000;
+color: #fff;
+overflow: hidden;
+font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+#bg {
+position: fixed;
+inset: 0;
+background-size: cover;
+background-position: center;
+transition: background-image 0.5s ease, filter 0.5s ease;
+filter: brightness(0.4);
+z-index: 0;
+}
+
+#ui-container {
+position: fixed;
+inset: 0;
+transition: opacity 0.3s ease;
+z-index: 10;
+}
+
+#ui-container.hidden {
+opacity: 0;
+pointer-events: none;
+}
+
+#drop-zone {
+position: absolute;
+inset: 0;
+display: flex;
+align-items: center;
+justify-content: center;
+color: #333;
+font-size: 1.5rem;
+font-weight: 600;
+letter-spacing: 2px;
+text-transform: uppercase;
+background: #050505;
+transition: color 0.2s, background 0.2s;
+}
+
+#drop-zone.over {
+color: #fff;
+background: #111;
+}
+
+#bar-container {
+position: absolute;
+top: 20%;
+left: 0;
+width: 100%;
+display: flex;
+justify-content: center;
+}
+
+#game-bar {
+display: flex;
+gap: 20px;
+padding: 30px;
+overflow-x: auto;
+scroll-behavior: smooth;
+max-width: 90%;
+}
+
+#game-bar::-webkit-scrollbar { display: none; }
+#game-bar { -ms-overflow-style: none; scrollbar-width: none; }
+
+.tile {
+width: 100px;
+height: 100px;
+background: #1a1a1a;
+flex-shrink: 0;
+border-radius: 12px;
+opacity: 0.4;
+transform: scale(0.9);
+transition: all 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+background-size: cover;
+background-position: center;
+box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+}
+
+.tile.selected {
+opacity: 1;
+transform: scale(1.2) translateY(10px);
+box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+}
+
+#runtime-container {
+position: fixed;
+inset: 0;
+background: #000;
+display: none;
+z-index: 100;
+}
+
+#runtime-container.active {
+display: block;
+}
+
+#runtime-container iframe, #runtime-container #game {
+width: 100%;
+height: 100%;
+border: none;
+}
+
+.placeholder {
+width: 100%;
+height: 100%;
+display: flex;
+align-items: center;
+justify-content: center;
+font-size: 0.8rem;
+color: #555;
+text-align: center;
+}
+</style>
+
+</head>
+<body>
+<div id="bg"></div>
+
+<div id="ui-container">
+<div id="drop-zone">Click or Drop Folder Here</div>
+<div id="bar-container" style="display:none;">
+<div id="game-bar"></div>
+</div>
+</div>
+
+<div id="runtime-container"></div>
+
+<input type="file" id="folderInput" webkitdirectory directory multiple hidden>
+
+<script>
+// ── Base122 codec (for .JAM format) ──────────────────────────────
+const B122=(()=>{const I=[0,10,13,34,38,92],IM=new Int8Array(128).fill(-1);
+I.forEach((v,i)=>IM[v]=i);
+return{
+enc(d){const o=new Uint8Array(d.length*1.5+10);let oi=0,ba=0,bl=0;
+for(let i=0;i<d.length;i++){ba=(ba<<8)|d[i];bl+=8;
+while(bl>=7){bl-=7;const b=(ba>>>bl)&0x7F,il=IM[b];
+if(il!==-1){let nx=-1;if(bl<7&&i+1<d.length){ba=(ba<<8)|d[++i];bl+=8;}
+if(bl>=7){bl-=7;nx=(ba>>>bl)&0x7F;}
+if(nx===-1){o[oi++]=0xC2|(7<<2)|(b>>6);o[oi++]=0x80|(b&0x3F);}
+else{o[oi++]=0xC2|(il<<2)|(nx>>6);o[oi++]=0x80|(nx&0x3F);}}
+else o[oi++]=b;}}
+if(bl>0){const b=(ba<<(7-bl))&0x7F,il=IM[b];
+if(il!==-1){o[oi++]=0xC2|(7<<2)|(b>>6);o[oi++]=0x80|(b&0x3F);}else o[oi++]=b;}
+return o.subarray(0,oi);},
+dec(d){const o=new Uint8Array(d.length);let oi=0,ba=0,bl=0;
+for(let i=0;i<d.length;i++){const c=d[i];
+if(c>127){const il=(c>>>2)&7,nx=d[++i]&0x3F;
+if(il!==7){ba=(ba<<7)|I[il];if((bl+=7)>=8)o[oi++]=(ba>>>(bl-=8))&0xFF;}
+ba=(ba<<7)|(((c&1)<<6)|nx);if((bl+=7)>=8)o[oi++]=(ba>>>(bl-=8))&0xFF;}
+else{ba=(ba<<7)|c;if((bl+=7)>=8)o[oi++]=(ba>>>(bl-=8))&0xFF;}}
+return o.subarray(0,oi);}
+}})();
+
+// ── MIME lookup ──────────────────────────────────────────────────
+const MIME={html:'text/html',htm:'text/html',css:'text/css',txt:'text/plain',
+js:'application/javascript',mjs:'application/javascript',json:'application/json',wasm:'application/wasm',
+png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',gif:'image/gif',svg:'image/svg+xml',webp:'image/webp',ico:'image/x-icon',bmp:'image/bmp',
+mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',m4a:'audio/mp4',flac:'audio/flac',aac:'audio/aac',
+mp4:'video/mp4',webm:'video/webm',ogv:'video/ogg',
+ttf:'font/ttf',woff:'font/woff',woff2:'font/woff2',otf:'font/otf',
+pck:'application/octet-stream',unityweb:'application/octet-stream',bin:'application/octet-stream',data:'application/octet-stream',
+love:'application/octet-stream',pak:'application/octet-stream',glb:'model/gltf-binary',gltf:'model/gltf+json',
+xml:'application/xml',pdf:'application/pdf',webmanifest:'application/manifest+json'};
+const mime=p=>{let l=p.toLowerCase().replace(/\.part\d+$/,'');
+if(l.endsWith('.wasm.code.unityweb')||l.endsWith('.wasm.framework.unityweb'))return'application/wasm';
+return MIME[l.split('.').pop()]||'application/octet-stream';};
+
+// ── Core App Logic ───────────────────────────────────────────────
+const ROM_MAP = {
+'nes': 'nes', 'fds': 'nes',
+'sfc': 'snes', 'smc': 'snes',
+'n64': 'n64', 'z64': 'n64',
+'gb': 'gb', 'gbc': 'gb',
+'gba': 'gba',
+'nds': 'nds',
+'bin': 'segaMD', 'md': 'segaMD', 'smd': 'segaMD', 'gen': 'segaMD',
+'iso': 'psx', 'pbp': 'psx', 'ecm': 'psx',
+'32x': 'sega32x',
+'gg': 'segaGG',
+'sms': 'segaMS'
+};
+
+let games = [];
+let selectedIndex = 0;
+
+const dropZone = document.getElementById('drop-zone');
+const folderInput = document.getElementById('folderInput');
+const barContainer = document.getElementById('bar-container');
+const gameBar = document.getElementById('game-bar');
+const uiContainer = document.getElementById('ui-container');
+const runtimeContainer = document.getElementById('runtime-container');
+const bg = document.getElementById('bg');
+
+dropZone.addEventListener('click', () => folderInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
+dropZone.addEventListener('drop', async (e) => {
+e.preventDefault();
+dropZone.classList.remove('over');
+const files = [];
+for (const item of Array.from(e.dataTransfer.items)) {
+const entry = item.webkitGetAsEntry?.();
+if (entry) await walk(entry, '', files);
+else if (item.getAsFile()) files.push(item.getAsFile());
+}
+processFiles(files);
+});
+
+folderInput.addEventListener('change', e => processFiles(Array.from(e.target.files)));
+
+async function walk(entry, path, out) {
+if (entry.isFile) out.push(await new Promise(r => entry.file(f => out.push(f), r)));
+else if (entry.isDirectory) {
+const reader = entry.createReader();
+const entries = await new Promise(r => { let a=[]; const q=()=>reader.readEntries(b=>b.length?(a.push(...b),q()):r(a)); q(); });
+for (const e of entries) await walk(e, entry.fullPath, out);
+}
+}
+
+function processFiles(files) {
+if (!files.length) return;
+games = [];
+
+files.forEach(file => {
+const name = file.name.toLowerCase();
+const path = file.webkitRelativePath || file.name;
+
+if (name.endsWith('.ds_store') || path.includes('__macosx')) return;
+
+if (name.endsWith('-bg.png')) {
+const baseName = name.slice(0, -7);
+games.push({ id: baseName, type: 'bg', file, url: URL.createObjectURL(file) });
+return;
+}
+
+if (name.endsWith('.png')) {
+const baseName = name.slice(0, -4);
+games.push({ id: baseName, type: 'thumb', file, url: URL.createObjectURL(file) });
+return;
+}
+
+if (name.endsWith('.jam')) {
+const baseName = name.slice(0, -4);
+games.push({ id: baseName, type: 'jam', file, name: file.name });
+return;
+}
+
+if (name.endsWith('.swf')) {
+const baseName = name.slice(0, -4);
+games.push({ id: baseName, type: 'flash', file, name: file.name });
+return;
+}
+
+const ext = name.split('.').pop();
+if (ROM_MAP[ext]) {
+const baseName = name.slice(0, -ext.length - 1);
+games.push({ id: baseName, type: 'emulator', core: ROM_MAP[ext], file, name: file.name });
+}
+});
+
+// Merge by ID
+const merged = {};
+games.forEach(g => {
+if (!merged[g.id]) merged[g.id] = { id: g.id, runner: null, core: null, thumb: null, bg: null, file: null, name: g.name || g.id };
+if (g.type === 'jam') { merged[g.id].runner = 'jam'; merged[g.id].file = g.file; }
+else if (g.type === 'flash') { merged[g.id].runner = 'flash'; merged[g.id].file = g.file; }
+else if (g.type === 'emulator') { merged[g.id].runner = 'emulator'; merged[g.id].core = g.core; merged[g.id].file = g.file; }
+else if (g.type === 'thumb') merged[g.id].thumb = g.url;
+else if (g.type === 'bg') merged[g.id].bg = g.url;
+});
+
+games = Object.values(merged).filter(g => g.runner !== null);
+
+if (games.length > 0) {
+dropZone.style.display = 'none';
+barContainer.style.display = 'flex';
+renderBar();
+selectedIndex = 0;
+updateSelection();
+}
+}
+
+function renderBar() {
+gameBar.innerHTML = '';
+games.forEach((g, i) => {
+const tile = document.createElement('div');
+tile.className = 'tile';
+if (g.thumb) {
+tile.style.backgroundImage = `url('${g.thumb}')`;
+} else {
+tile.innerHTML = `<div class="placeholder">${g.name.substring(0, 10)}</div>`;
+}
+gameBar.appendChild(tile);
+});
+}
+
+function updateSelection() {
+const tiles = document.querySelectorAll('.tile');
+tiles.forEach((t, i) => t.classList.toggle('selected', i === selectedIndex));
+
+const game = games[selectedIndex];
+if (game && game.bg) {
+bg.style.backgroundImage = `url('${game.bg}')`;
+} else {
+bg.style.backgroundImage = 'none';
+}
+
+const selectedTile = tiles[selectedIndex];
+if (selectedTile) {
+const barRect = gameBar.getBoundingClientRect();
+const tileRect = selectedTile.getBoundingClientRect();
+const scrollLeft = selectedTile.offsetLeft - (gameBar.offsetLeft) - (barRect.width / 2) + (tileRect.width / 2);
+gameBar.scrollTo({ left: scrollLeft, behavior: 'smooth' });
+}
+}
+
+document.addEventListener('keydown', (e) => {
+if (games.length === 0) return;
+
+if (uiContainer.classList.contains('hidden')) {
+if (e.key === 'Escape') {
+exitGame();
+}
+return;
+}
+
+if (e.key === 'ArrowRight') {
+e.preventDefault();
+selectedIndex = Math.min(selectedIndex + 1, games.length - 1);
+updateSelection();
+} else if (e.key === 'ArrowLeft') {
+e.preventDefault();
+selectedIndex = Math.max(selectedIndex - 1, 0);
+updateSelection();
+} else if (e.key === 'Enter') {
+e.preventDefault();
+launchGame(games[selectedIndex]);
+}
+});
+
+function launchGame(game) {
+uiContainer.classList.add('hidden');
+runtimeContainer.classList.add('active');
+runtimeContainer.innerHTML = '';
+
+if (game.runner === 'jam') {
+runJam(game.file);
+} else if (game.runner === 'flash') {
+runFlash(game.file);
+} else if (game.runner === 'emulator') {
+runEmulator(game.file, game.core);
+}
+}
+
+function exitGame() {
+uiContainer.classList.remove('hidden');
+runtimeContainer.classList.remove('active');
+runtimeContainer.innerHTML = '';
+}
+
+// ── Runners ──────────────────────────────────────────────────────
+
+async function runFlash(file) {
+if (!window.RufflePlayer) {
+await new Promise((resolve) => {
+const script = document.createElement('script');
+script.src = "https://unpkg.com/@ruffle-rs/ruffle";
+script.onload = resolve;
+document.head.appendChild(script);
+});
+}
+window.RufflePlayer = window.RufflePlayer || {};
+window.RufflePlayer.config = { "autoplay": "on", "unmuteOverlay": "visible" };
+const player = window.RufflePlayer.newest();
+const ruffle = player.create_player();
+runtimeContainer.appendChild(ruffle);
+ruffle.style.width = '100%';
+ruffle.style.height = '100%';
+ruffle.load({ url: URL.createObjectURL(file) });
+}
+
+function runEmulator(file, core) {
+runtimeContainer.innerHTML = '<div id="game"></div>';
+
+window.EJS_player = '#game';
+window.EJS_core = core;
+window.EJS_gameUrl = URL.createObjectURL(file);
+window.EJS_patUrl = '';
+window.EJS_startOnLoaded = true;
+
+const script = document.createElement('script');
+script.src = 'https://cdn.emulatorjs.org/latest/data/loader.js';
+document.body.appendChild(script);
+}
+
+function runJam(file) {
+const iframe = document.createElement('iframe');
+iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-pointer-lock allow-forms allow-popups');
+runtimeContainer.appendChild(iframe);
+
+const fjamCode = `
+import * as fflate from 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm';
+
+// Base122 Decoder
+const B122 = ${B122.toString()};
+
+// MIME
+${mime.toString()}
+
+window.addEventListener('message', async (e) => {
+if (e.data.type === 'run_jam' && e.data.file) {
+await openJam(e.data.file);
+}
+});
+
+async function openJam(file) {
+try {
+let buf = await file.arrayBuffer(), v = new DataView(buf);
+if (v.getUint32(0, false) !== 0x4A414D00) throw new Error("Invalid JAM");
+const zip = B122.dec(new Uint8Array(buf, 8, v.getUint32(4, true)));
+buf = null;
+const unz = fflate.unzipSync(zip);
+
+const urlMap = new Map(), revMap = new Map();
+const imap = { imports: {} };
+const baseDirGuess = Object.keys(unz).find(k => k.toLowerCase().endsWith('index.html')) || Object.keys(unz).find(k => k.toLowerCase().endsWith('.html')) || '';
+const base = baseDirGuess.includes('/') ? baseDirGuess.substring(0, baseDirGuess.lastIndexOf('/') + 1) : '';
+
+for (const p in unz) {
+if (p.endsWith('/') || p.includes('__MACOSX') || p.endsWith('.DS_Store')) continue;
+const cp = p.replace(/\\\\/g, '/').replace(/^\\/+/, ''), type = mime(cp);
+const url = URL.createObjectURL(new Blob([unz[p]], { type }));
+revMap.set(url, cp);
+urlMap.set(cp, url); urlMap.set('/' + cp, url); urlMap.set('./' + cp, url);
+if (cp.startsWith(base)) {
+const rel = cp.substring(base.length);
+urlMap.set(rel, url); urlMap.set('/' + rel, url); urlMap.set('./' + rel, url);
+urlMap.set(rel + '.part1', url);
+}
+const fn = cp.split('/').pop();
+urlMap.set(fn, url); urlMap.set('./' + fn, url); urlMap.set('/' + fn, url);
+urlMap.set(cp + '.part1', url); urlMap.set(fn + '.part1', url);
+if (/\\.(m?js|wasm)$/i.test(cp)) {
+imap.imports[cp] = url; imap.imports['/' + cp] = url; imap.imports['./' + cp] = url;
+if (!imap.imports[fn]) {
+imap.imports[fn] = url; imap.imports['./' + fn] = url; imap.imports['/' + fn] = url;
+}
+}
+unz[p] = null;
+}
+boot(urlMap, revMap, imap, base);
+} catch(e) { console.error(e); }
+}
+
+function boot(urlMap, revMap, imap, base) {
+const entry = [...urlMap.keys()].find(k => k.toLowerCase().endsWith('index.html')) || [...urlMap.keys()].find(k => k.toLowerCase().endsWith('.html'));
+if (!entry) return;
+
+const R = url => {
+if (!url || typeof url !== 'string' || url.startsWith('blob:') || url.startsWith('data:')) return url;
+if (urlMap.has(url)) return urlMap.get(url);
+try {
+const u = new URL(url, "http://vfs.local/");
+if (u.hostname !== 'vfs.local' && u.hostname !== location.hostname && u.hostname !== '') return url;
+let p = decodeURIComponent(u.pathname).replace(/[?#].*$/, '');
+if (p.startsWith('/')) p = p.substring(1);
+if (urlMap.has(p)) return urlMap.get(p);
+const f = p.split('/').pop();
+if (urlMap.has(f)) return urlMap.get(f);
+} catch (e) {}
+return url;
+};
+
+window.__R__ = R;
+
+fetch(urlMap.get(entry)).then(r => r.text()).then(html => {
+const blocks = [];
+html = html.replace(/<script([^>]*)>([\\s\\S]*?)<\\/script>/gi, (_, attrs, content) => {
+blocks.push(content);
+return '<script' + attrs + '>\\x00B' + (blocks.length - 1) + '\\x00<\\/' + 'script>';
+});
+html = html.replace(/((?:src|href|data)\\s*=\\s*["'])([^"']+)(["'])/gi, (_, pre, url, post) => pre + R(url) + post);
+html = html.replace(/(url\\(\\s*["']?)([^"')]+)(["']?\\s*\\))/gi, (_, pre, url, post) => pre + R(url) + post);
+html = html.replace(/\\x00B(\\d+)\\x00/g, (_, i) => blocks[+i]);
+
+const rt = \`(function(){
+var R=window.__R__;
+var _V="http://vfs.local/";
+Object.defineProperty(Document.prototype,'URL',{get:function(){return _V;},configurable:true});
+Object.defineProperty(Document.prototype,'baseURI',{get:function(){return _V;},configurable:true});
+var _URL=URL;
+URL=function(u,b){
+if(b!==undefined){
+if(typeof b==='string'&&(b.startsWith('blob:')||b.startsWith('about:')))b=_V;
+try{return new _URL(u,b);}catch(e){try{return new _URL(u,_V);}catch(e2){return{href:String(u),pathname:'/'+String(u),protocol:'http:',hostname:'vfs.local',origin:_V};}}
+}else{
+try{return new _URL(u);}catch(e){return{href:String(u),pathname:'/'+String(u),protocol:'http:',hostname:'vfs.local',origin:_V};}}
+};
+URL.createObjectURL=_URL.createObjectURL;URL.revokeObjectURL=_URL.revokeObjectURL;
+URL.prototype=_URL.prototype;
+var _f=fetch;fetch=function(i,n){var u=i instanceof Request?i.url:i;var r=R(u);
+return i instanceof Request?_f(new Request(r,i),n):_f(r,n);};
+var _X=XMLHttpRequest;XMLHttpRequest=function(){var x=new _X,o=x.open;
+x.open=function(m,u){return o.call(this,m,R(u))};return x;};
+var _sa=Element.prototype.setAttribute;
+Element.prototype.setAttribute=function(n,v){return _sa.call(this,n,['src','href','data'].indexOf(n)!==-1?R(v):v);};
+var pp=function(p,c){var d=Object.getOwnPropertyDescriptor(c.prototype,p);if(!d)return;
+Object.defineProperty(c.prototype,p,{set:function(v){d.set.call(this,R(v));},get:d.get,configurable:true});};
+[HTMLScriptElement,HTMLImageElement,HTMLLinkElement,HTMLIFrameElement,HTMLSourceElement,HTMLVideoElement,HTMLAudioElement].forEach(function(c){if(c)pp('src',c);});
+if(HTMLLinkElement)pp('href',HTMLLinkElement);if(HTMLObjectElement)pp('data',HTMLObjectElement);
+if(window.Audio){var _A=Audio;Audio=function(s){return s?new _A(R(s)):new _A();};Audio.prototype=_A.prototype;}
+if(window.Worker){var _W=Worker;Worker=function(u,o){var r=R(u);
+if(r.startsWith('blob:')){var M=\${JSON.stringify(imap.imports)};
+var _rmW=\${JSON.stringify([...revMap].filter(e=>/\\.(m?js|wasm)$/i.test(e[1])))};
+var code='var M='+JSON.stringify(M)+';var _rmW=new Map('+JSON.stringify(_rmW)+');var _URL=URL;URL=function(u,b){if(b!==undefined){if(typeof b==="string"&&(b.startsWith("blob:")||b.startsWith("about:")))b="http://vfs.local/";try{return new _URL(u,b);}catch(e){try{return new _URL(u,"http://vfs.local/");}catch(e2){return{href:String(u),pathname:"/"+String(u),protocol:"http:",hostname:"vfs.local",origin:"http://vfs.local/"};}}}else{try{return new _URL(u);}catch(e){return{href:String(u),pathname:"/"+String(u),protocol:"http:",hostname:"vfs.local",origin:"http://vfs.local/"};}}};URL.createObjectURL=_URL.createObjectURL;URL.revokeObjectURL=_URL.revokeObjectURL;URL.prototype=_URL.prototype;function _r(u){if(!u||u.startsWith("blob:")||u.startsWith("data:"))return u;try{var p=new URL(u,"http://vfs.local/");var s=decodeURIComponent(p.pathname);if(s.startsWith("/"))s=s.substring(1);if(M[s])return M[s];var f=s.split("/").pop();for(var k in M)if(k.endsWith("/"+f)||k===f)return M[k];}catch(e){}return u;}var _i=importScripts;importScripts=function(){_i.apply(null,[].slice.call(arguments).map(_r));};var _wf=fetch;fetch=function(i,n){var u=i instanceof Request?i.url:i;var r=_r(u);return i instanceof Request?_wf(new Request(r,i),n):_wf(r,n);};_i("'+r+'");';
+return new _W(URL.createObjectURL(new Blob([code],{type:'application/javascript'})),o);}
+return new _W(r,o);};}
+var _dw=document.write,_dwl=document.writeln;
+var _ps=function(s){if(typeof s!=='string')return s;
+return s.replace(/((?:src|href|data)\\\\s*=\\\\s*["'])([^"']+)(["'])/gi,function(_,pre,url,post){var r=R(url);return r!==url?pre+r+post:_;});};
+document.write=function(){return _dw.apply(document,[].slice.call(arguments).map(_ps));};
+document.writeln=function(){return _dwl.apply(document,[].slice.call(arguments).map(_ps));};
+var _pe=function(n){if(n.nodeType!==1)return;
+['src','href','data'].forEach(function(a){if(n.hasAttribute(a)){var o=n.getAttribute(a),r=R(o);if(r!==o)n.setAttribute(a,r);}});};
+new MutationObserver(function(ms){ms.forEach(function(m){m.addedNodes.forEach(function(n){
+_pe(n);if(n.querySelectorAll)n.querySelectorAll('[src],[href],[data]').forEach(_pe);});});})
+.observe(document.documentElement,{childList:true,subtree:true});
+var _ru=function(s){return typeof s!=='string'?s:s.replace(/url\\\\(\\\\s*["']?([^"')]+)["']?\\\\s*\\\\)/gi,function(m,u){var r=R(u);return r!==u?'url("'+r+'")':m;});};
+var _sp=CSSStyleDeclaration.prototype.setProperty;
+CSSStyleDeclaration.prototype.setProperty=function(p,v,pr){return _sp.call(this,p,_ru(v),pr);};
+var _cs=Object.getOwnPropertyDescriptor(CSSStyleDeclaration.prototype,'cssText');
+if(_cs){Object.defineProperty(CSSStyleDeclaration.prototype,'cssText',{set:function(v){_cs.set.call(this,_ru(v));},get:_cs.get,configurable:true});}
+})();\`;
+
+const inject = '<script type="importmap">' + JSON.stringify(imap) + '<\\/' + 'script><script>' + rt + '<\\/' + 'script>';
+const hi = html.toLowerCase().indexOf('<head>');
+const final = hi !== -1 ? html.slice(0, hi + 6) + inject + html.slice(hi + 6) : inject + html;
+document.open(); document.write(final); document.close();
+});
+}
+`;
+
+const doc = iframe.contentWindow.document;
+doc.open();
+doc.write(`<html><head><style>*{margin:0;padding:0}</style></head><body><script type="module">${fjamCode}<\/script></body></html>`);
+doc.close();
+
+// Send the file to the iframe once it's ready
+const checkReady = setInterval(() => {
+if (iframe.contentWindow) {
+clearInterval(checkReady);
+// We can't pass File objects directly via postMessage in some cases, but it actually works for File objects
+iframe.contentWindow.postMessage({ type: 'run_jam', file: file }, '*');
+}
+}, 100);
+}
+</script>
+</body>
+</html>
