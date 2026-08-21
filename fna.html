@@ -25,7 +25,7 @@
 const $ = id => document.getElementById(id);
 const status = msg => $('status').textContent = msg;
 
-// ── Native Compression/Decompression Helpers ──────────────────────
+// ── Native Compression Helper ──────────────────────────────────────
 async function compressData(data) {
   const cs = new CompressionStream('deflate-raw');
   const writer = cs.writable.getWriter();
@@ -118,16 +118,26 @@ async function compressData(data) {
 
   status("Bootstrapping VFS...");
   
-  // Fetch entry HTML via native decompression
-  const htmlText = await fetchFNAFile(entry).then(r => r.text());
+  // Fetch entry HTML via native decompression (Outer Scope)
+  const entryMeta = index[entry];
+  const slice = buf.slice(payloadOffset + entryMeta.o, payloadOffset + entryMeta.o + entryMeta.c);
+  const ds = new DecompressionStream('deflate-raw');
+  const writer = ds.writable.getWriter();
+  writer.write(slice);
+  writer.close();
+  
+  const reader = ds.readable.getReader();
+  const chunks = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const htmlText = await new Blob(chunks).text();
 
   const injected = `
 <script>
 // ── FNA VIRTUAL FILE SYSTEM ───────────────────────────────────
-window.__FNA_BUFFER__ = window.opener ? window.opener.__FNA_BUFFER__ : window.__FNA_BUFFER__;
-window.__FNA_INDEX__ = window.opener ? window.opener.__FNA_INDEX__ : window.__FNA_INDEX__;
-window.__FNA_OFFSET__ = window.opener ? window.opener.__FNA_OFFSET__ : window.__FNA_OFFSET__;
-
 const _V = "https://fna.local/";
 
 // ── Secure Context Spoofing ─────────────────────────────────────
@@ -212,7 +222,7 @@ XMLHttpRequest = function() {
         o.call(this, 'GET', URL.createObjectURL(b));
         this.send();
       }));
-      return; // We handle send internally
+      return;
     }
     return o.call(this, m, u);
   };
@@ -242,7 +252,6 @@ Element.prototype.setAttribute = function(name, val) {
   return _sa.call(this, name, val);
 };
 
-// Property setters
 ['HTMLScriptElement', 'HTMLImageElement', 'HTMLLinkElement', 'HTMLSourceElement', 'HTMLVideoElement', 'HTMLAudioElement'].forEach(c => {
   if (window[c]) {
     const d = Object.getOwnPropertyDescriptor(window[c].prototype, 'src');
@@ -259,8 +268,6 @@ if (window.Worker) {
   Worker = function(url, o) {
     const p = resolvePath(url);
     if (p) {
-      const code = 'var _f = fetch; fetch = function(i,n){return _f(i,n)};'; // Simplified worker fetch
-      // Properly fetch worker code, wrap, and spawn
       return (async () => {
         const r = await fetchFNAFile(p);
         const t = await r.text();
@@ -315,5 +322,4 @@ console.log("FNA VFS ACTIVE");
 };
 </script>
 </body>
-</html>
 </html>
