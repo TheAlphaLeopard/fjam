@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>f(jam)</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{height:100vh;display:flex;flex-direction:column;font-family:monospace;background:#0a0a0a;color:#e0e0e0;overflow:hidden}
+#ui{padding:8px;display:flex;gap:8px;align-items:center;background:#111;border-bottom:1px solid #333;flex-shrink:0}
+#ui button{padding:6px 12px;background:#222;border:1px solid #444;color:#ccc;border-radius:4px;cursor:pointer;font-family:inherit;font-size:12px}
+#ui button:hover{background:#333;color:#fff}
+#status{margin-left:auto;font-size:11px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#frame{flex:1;border:none;width:100%;background:#000}
+#drop{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.8);z-index:999;font-size:14px;color:#666;pointer-events:none;opacity:0;transition:opacity .2s}
+#drop.over{opacity:1}
+</style>
+</head>
+<body>
+<div id="ui">
+  <button id="openBtn">Open .JAM</button>
+  <button id="packBtn">Pack Folder</button>
+  <span id="status">Ready — drop a .JAM or folder</span>
+</div>
+<iframe id="frame"></iframe>
+<div id="drop">Drop .JAM file or folder here</div>
+<input type="file" id="jamInput" accept=".jam" hidden>
+<input type="file" id="folderInput" webkitdirectory directory multiple hidden>
+
+<script type="module">
+import * as fflate from 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm';
+
+// ═══════════════════════════════════════════════════════════════
+// MODULE: Base122 Codec
+// Binary ↔ text encoding that avoids HTML-unsafe bytes
+// ═══════════════════════════════════════════════════════════════
+const Base122 = (() => {
+  const ILLEGAL = [0, 10, 13, 34, 38, 92];
+  const ILLEGAL_MAP = new Int8Array(128).fill(-1);
+  ILLEGAL.forEach((v, i) => ILLEGAL_MAP[v] = i);
+
+  function encode(data) {
+    const out = new Uint8Array(data.length * 1.5 + 10);
+    let oi = 0, acc = 0, bits = 0;
+
+    for (let i = 0; i < data.length; i++) {
+      acc = (acc << 8) | data[i];
+      bits += 8;
+      while (bits >= 7) {
+        bits -= 7;
+        const b = (acc >>> bits) & 0x7F;
+        const il = ILLEGAL_MAP[b];
+        if (il !== -1) {
+          // This byte is illegal, escape it with the next byte
+          let next = -1;
+          if (bits < 7 && i + 1 < data.length) {
+            acc = (acc << 8) | data[++i];
+            bits += 8;
+          }
+          if (bits >= 7) {
+            bits -= 7;
+            next = (acc >>> bits) & 0x7F;
+          }
+          if (next === -1) {
+            out[oi++] = 0xC2 | (7 << 2) | (b >> 6);
+            out[oi++] = 0x80 | (b & 0x3F);
+          } else {
+            out[oi++] = 0xC2 | (il << 2) | (next >> 6);
+            out[oi++] = 0x80 | (next & 0x3F);
+          }
+        } else {
+          out[oi++] = b;
+        }
+      }
+    }
+    // Handle remaining bits
+    if (bits > 0) {
+      const b = (acc << (7 - bits)) & 0x7F;
+      const il = ILLEGAL_MAP[b];
+      if (il !== -1) {
+        out[oi++] = 0xC2 | (7 << 2) | (b >> 6);
+        out[oi++] = 0x80 | (b & 0x3F);
+      } else {
+        out[oi++] = b;
+      }
+    }
+    return out.subarray(0, oi);
+  }
+
+  function decode(data) {
+    const out = new Uint8Array(data.length);
+    let oi = 0, acc = 0, bits = 0;
+
+    for (let i = 0; i < data.length; i++) {
+      const c = data[i];
+      if (c > 127) {
+        // Two-byte escape sequence
+        const il = (c >>> 2) & 7;
+        const next = data[++i] & 0x3F;
+        if (il !== 7) {
+          acc = (acc << 7) | ILLEGAL[il];
+          if ((bits += 7) >= 8) out[oi++] = (acc >>> (bits -= 8)) & 0xFF;
+        }
+        acc = (acc << 7) | (((c & 1) << 6) | next);
+        if ((bits += 7) >= 8) out[oi++] = (acc >>> (bits -= 8)) & 0xFF;
+      } else {
+        acc = (acc << 7) | c;
+        if ((bits += 7) >= 8) out[oi++] = (acc >>> (bits -= 8)) & 0xFF;
+      }
+    }
+    return out.subarray(0, oi);
+  }
+
+  return { encode, decode };
+})();
+
+// ═══════════════════════════════════════════════════════════════
+// MODULE: MIME Type Lookup
+// ═══════════════════════════════════════════════════════════════
+const MIME = {
+  html: 'text/html', htm: 'text/html', css: 'text/css', txt: 'text/plain',
+  js: 'application/javascript', mjs: 'application/javascript',
+  json: 'application/json', wasm: 'application/wasm',
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+  gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp',
+  ico: 'image/x-icon', bmp: 'image/bmp',
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
+  m4a: 'audio/mp4', flac: 'audio/flac', aac: 'audio/aac',
+  mp4: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg',
+  ttf: 'font/ttf', woff: 'font/woff', woff2: 'font/woff2', otf: 'font/otf',
+  pck: 'application/octet-stream', unityweb: 'application/octet-stream',
+  bin: 'application/octet-stream', data: 'application/octet-stream',
+  love: 'application/octet-stream', pak: 'application/octet-stream',
+  glb: 'model/gltf-binary', gltf: 'model/gltf+json',
+  xml: 'application/xml', pdf: 'application/pdf',
+  webmanifest: 'application/manifest+json'
+};
+
+function lookupMime(path) {
+  let l = path.toLowerCase().replace(/\.part\d+$/, '');
+  if (l.endsWith('.wasm.code.unityweb') || l.endsWith('.wasm.framework.unityweb')) {
+    return 'application/wasm';
+  }
+  return MIME[l.split('.').pop()] || 'application/octet-stream';
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MODULE: VFS (Virtual File System)
+// Creates blob URLs and provides path resolution
+// ═══════════════════════════════════════════════════════════════
+class VFS {
+  constructor(files) {
+    this.blobs = new Map();      // path → blob URL
+    this.index = new Map();      // lookup key → blob URL
+    this.importMap = { imports: {} };
+    this.entryPath = null;
+    this._build(files);
+  }
+
+  _build(files) {
+    // Find entry HTML (prefer root index.html)
+    const htmlPaths = [];
+    for (const path of files.keys()) {
+      if (/\.html?$/i.test(path)) htmlPaths.push(path);
+    }
+    htmlPaths.sort((a, b) => {
+      const aDepth = a.split('/').length;
+      const bDepth = b.split('/').length;
+      if (aDepth !== bDepth) return aDepth - bDepth;
+      return a.length - b.length;
+    });
+    this.entryPath = htmlPaths.find(p => /(^|\/)index\.html?$/i.test(p)) || htmlPaths[0];
+
+    // Determine base directory (for relative resolution)
+    const baseDir = this.entryPath && this.entryPath.includes('/')
+      ? this.entryPath.substring(0, this.entryPath.lastIndexOf('/') + 1)
+      : '';
+
+    // Create blob URLs and build index
+    for (const [path, data] of files) {
+      if (path.endsWith('/') || path.includes('__MACOSX') || path.endsWith('.DS_Store')) continue;
+
+      const cleanPath = path.replace(/\\/g, '/').replace(/^\/+/, '');
+      const mime = lookupMime(cleanPath);
+      const blob = new Blob([data], { type: mime });
+      const url = URL.createObjectURL(blob);
+
+      this.blobs.set(cleanPath, url);
+
+      // Build lookup index with multiple path forms
+      const forms = new Set([
+        cleanPath,
+        '/' + cleanPath,
+        './' + cleanPath,
+        cleanPath.split('/').pop(),  // filename only
+      ]);
+
+      // Add base-relative forms
+      if (baseDir && cleanPath.startsWith(baseDir)) {
+        const rel = cleanPath.substring(baseDir.length);
+        forms.add(rel);
+        forms.add('/' + rel);
+        forms.add('./' + rel);
+      }
+
+      // Add .part1 variants (Unity uses these)
+      forms.add(cleanPath + '.part1');
+
+      for (const form of forms) {
+        if (!this.index.has(form)) this.index.set(form, url);
+      }
+
+      // Build import map for JS/WASM modules
+      if (/\.(m?js|wasm)$/i.test(cleanPath)) {
+        const specifiers = [
+          cleanPath,
+          '/' + cleanPath,
+          './' + cleanPath,
+          cleanPath.split('/').pop(),
+        ];
+        if (baseDir && cleanPath.startsWith(baseDir)) {
+          const rel = cleanPath.substring(baseDir.length);
+          specifiers.push(rel, '/' + rel, './' + rel);
+        }
+        for (const spec of specifiers) {
+          if (!this.importMap.imports[spec]) {
+            this.importMap.imports[spec] = url;
+          }
+        }
+      }
+    }
+  }
+
+  resolve(url) {
+    if (!url || typeof url !== 'string') return url;
+    if (url.startsWith('blob:') || url.startsWith('data:')) return url;
+
+    // Direct lookup
+    if (this.index.has(url)) return this.index.get(url);
+
+    // Parse as URL relative to virtual root
+    try {
+      const parsed = new URL(url, 'http://vfs.local/');
+      const path = decodeURIComponent(parsed.pathname).replace(/^\//, '');
+      if (this.index.has(path)) return this.index.get(path);
+      const filename = path.split('/').pop();
+      if (this.index.has(filename)) return this.index.get(filename);
+    } catch (e) { /* pass through */ }
+
+    return url; // Not found, return as-is
+  }
+
+  getEntryHTML() {
+    if (!this.entryPath) return null;
+    return this.blobs.get(this.entryPath);
+  }
+
+  getImportMap() {
+    return this.importMap;
+  }
+
+  destroy() {
+    for (const url of this.blobs.values()) {
+      URL.revokeObjectURL(url);
+    }
+    this.blobs.clear();
+    this.index.clear();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MODULE: Loader
+// .JAM file → file map
+// ═══════════════════════════════════════════════════════════════
+async function loadJam(file) {
+  const buffer = await file.arrayBuffer();
+  const view = new DataView(buffer);
+
+  // Validate magic
+  if (view.getUint32(0, false) !== 0x4A414D00) {
+    throw new Error('Invalid .JAM file');
+  }
+
+  const payloadLength = view.getUint32(4, true);
+  const payload = new Uint8Array(buffer, 8, payloadLength);
+  const zipData = Base122.decode(payload);
+  const files = fflate.unzipSync(zipData);
+
+  return files;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MODULE: Packer
+// Folder → .JAM file
+// ═══════════════════════════════════════════════════════════════
+async function packJam(fileList) {
+  const map = {};
+
+  for (const { path, file } of fileList) {
+    const cleanPath = path.replace(/\\/g, '/');
+    if (cleanPath.includes('__MACOSX') || cleanPath.endsWith('.DS_Store')) continue;
+    map[cleanPath] = new Uint8Array(await file.arrayBuffer());
+  }
+
+  const zipData = fflate.zipSync(map, { level: 1 });
+  const payload = Base122.encode(zipData);
+  const header = new Uint8Array([74, 65, 77, 0]); // 'JAM\0'
+  const length = new Uint8Array(4);
+  new DataView(length.buffer).setUint32(0, payload.length, true);
+
+  const blob = new Blob([header, length, payload], { type: 'application/octet-stream' });
+  const first = fileList.find(f => f.path.includes('/'));
+  const name = (first ? first.path.split('/')[0] : 'app') + '.jam';
+
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = name;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MODULE: Runtime Template
+// Minimal interception code injected into the iframe.
+// Only patches what's necessary for dynamic resource loading.
+// ═══════════════════════════════════════════════════════════════
+function generateRuntime(vfsIndex) {
+  // Serialize VFS index for the iframe
+  const serializedIndex = JSON.stringify([...vfsIndex]);
+
+  return `
+(function() {
+  'use strict';
+
+  // ── VFS Index ──────────────────────────────────────────────
+  const INDEX = new Map(${serializedIndex});
+
+  // ── URL Resolver ───────────────────────────────────────────
+  function resolve(url) {
+    if (!url || typeof url !== 'string') return url;
+    if (url.startsWith('blob:') || url.startsWith('data:')) return url;
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+
+    if (INDEX.has(url)) return INDEX.get(url);
+
+    try {
+      const parsed = new URL(url, 'http://vfs.local/');
+      const path = decodeURIComponent(parsed.pathname).replace(/^\\//, '');
+      if (INDEX.has(path)) return INDEX.get(path);
+      const filename = path.split('/').pop();
+      if (INDEX.has(filename)) return INDEX.get(filename);
+    } catch (e) {}
+
+    return url;
+  }
+
+  // ── Base URI Fix ───────────────────────────────────────────
+  // srcdoc iframes have 'about:srcdoc' as base URI, which breaks
+  // URL construction. Give games a valid virtual base.
+  try {
+    Object.defineProperty(document, 'baseURI', {
+      get: () => 'http://vfs.local/',
+      configurable: true
+    });
+  } catch (e) {}
+
+  // ── Fetch Interception ─────────────────────────────────────
+  const _fetch = window.fetch;
+  window.fetch = function(input, init) {
+    const url = input instanceof Request ? input.url : input;
+    const resolved = resolve(url);
+    if (resolved !== url) {
+      if (input instanceof Request) {
+        return _fetch(new Request(resolved, input), init);
+      }
+      return _fetch(resolved, init);
+    }
+    return _fetch(input, init);
+  };
+
+  // ── XHR Interception ───────────────────────────────────────
+  const _xhrOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+    return _xhrOpen.call(this, method, resolve(url), ...rest);
+  };
+
+  // ── Element Property Interception ──────────────────────────
+  // Catches dynamically created <img>, <script>, <link>, etc.
+  const _origSet = Object.getOwnPropertyDescriptor(Element.prototype, 'setAttribute');
+
+  function patchProperty(ctor, prop) {
+    if (!ctor) return;
+    const desc = Object.getOwnPropertyDescriptor(ctor.prototype, prop);
+    if (!desc || !desc.set) return;
+
+    Object.defineProperty(ctor.prototype, prop, {
+      set: function(v) { desc.set.call(this, resolve(v)); },
+      get: desc.get,
+      configurable: true
+    });
+  }
+
+  patchProperty(HTMLScriptElement, 'src');
+  patchProperty(HTMLImageElement, 'src');
+  patchProperty(HTMLLinkElement, 'href');
+  patchProperty(HTMLIFrameElement, 'src');
+  patchProperty(HTMLSourceElement, 'src');
+  patchProperty(HTMLVideoElement, 'src');
+  patchProperty(HTMLAudioElement, 'src');
+  patchProperty(HTMLObjectElement, 'data');
+
+  // ── setAttribute Interception ──────────────────────────────
+  Element.prototype.setAttribute = function(name, value) {
+    const lower = name.toLowerCase();
+    if (lower === 'src' || lower === 'href' || lower === 'data') {
+      return _origSet.value.call(this, name, resolve(value));
+    }
+    return _origSet.value.call(this, name, value);
+  };
+
+  // ── Worker Interception ────────────────────────────────────
+  const _Worker = window.Worker;
+  window.Worker = function(url, options) {
+    const resolved = resolve(url);
+    if (resolved !== url) {
+      // If it's a blob URL, we need to wrap it with importScripts/fetch interception
+      if (resolved.startsWith('blob:')) {
+        return _Worker(resolved, options);
+      }
+      return new _Worker(resolved, options);
+    }
+    return new _Worker(url, options);
+  };
+  window.Worker.prototype = _Worker.prototype;
+
+  // ── Audio Interception ─────────────────────────────────────
+  const _Audio = window.Audio;
+  window.Audio = function(src) {
+    return src ? new _Audio(resolve(src)) : new _Audio();
+  };
+  window.Audio.prototype = _Audio.prototype;
+
+  // ── Framebust Protection ───────────────────────────────────
+  // Some games check if they're in an iframe and try to escape.
+  // Make them think they're top-level.
+  try {
+    Object.defineProperty(window, 'top', {
+      get: () => window.self,
+      configurable: true
+    });
+    Object.defineProperty(window, 'parent', {
+      get: () => window.self,
+      configurable: true
+    });
+    Object.defineProperty(window, 'frameElement', {
+      get: () => null,
+      configurable: true
+    });
+  } catch (e) {}
+
+  console.log('[fjam] runtime active — localStorage:', typeof localStorage !== 'undefined' ? 'OK' : 'FAIL');
+})();
+`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MODULE: HTML Processor
+// Rewrites URLs in HTML to blob URLs
+// ═══════════════════════════════════════════════════════════════
+async function processHTML(html, vfs) {
+  // 1. Remove <base> tags (they'd break our URL resolution)
+  html = html.replace(/<base\b[^>]*\/?>/gi, '');
+
+  // 2. Extract script contents to protect from URL rewriting
+  const scripts = [];
+  html = html.replace(
+    /<script([^>]*)>([\s\S]*?)<\/script>/gi,
+    (match, attrs, content) => {
+      scripts.push(content);
+      return `<script${attrs}>\x00SCRIPT${scripts.length - 1}\x00</` + `script>`;
+    }
+  );
+
+  // 3. Rewrite src/href/data attributes
+  html = html.replace(
+    /((?:src|href|data)\s*=\s*["'])([^"']+)(["'])/gi,
+    (match, pre, url, post) => {
+      const resolved = vfs.resolve(url);
+      return resolved !== url ? pre + resolved + post : match;
+    }
+  );
+
+  // 4. Rewrite CSS url() references
+  html = html.replace(
+    /(url\(\s*["']?)([^"')]+)(["']?\s*\))/gi,
+    (match, pre, url, post) => {
+      const resolved = vfs.resolve(url);
+      return resolved !== url ? pre + resolved + post : match;
+    }
+  );
+
+  // 5. Restore script contents
+  html = html.replace(
+    /\x00SCRIPT(\d+)\x00/g,
+    (match, i) => scripts[parseInt(i)]
+  );
+
+  return html;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MODULE: Fjam Orchestrator (Frontend)
+// ═══════════════════════════════════════════════════════════════
+class Fjam {
+  constructor() {
+    this.vfs = null;
+    this.frame = document.getElementById('frame');
+    this.statusEl = document.getElementById('status');
+    this.dropEl = document.getElementById('drop');
+    this._setupEvents();
+  }
+
+  _setStatus(msg) {
+    this.statusEl.textContent = msg;
+    console.log('[fjam]', msg);
+  }
+
+  async open(file) {
+    try {
+      this._setStatus('Loading ' + file.name + '...');
+      this._cleanup();
+
+      // Load and decode
+      const files = await loadJam(file);
+      this._setStatus('Decoded ' + Object.keys(files).length + ' files');
+
+      // Build VFS
+      this.vfs = new VFS(files);
+      this._setStatus('VFS ready');
+
+      // Get entry HTML
+      const entryURL = this.vfs.getEntryHTML();
+      if (!entryURL) throw new Error('No HTML entry found');
+
+      // Fetch and process HTML
+      const response = await fetch(entryURL);
+      const rawHTML = await response.text();
+      const processedHTML = await processHTML(rawHTML, this.vfs);
+
+      // Generate runtime
+      const runtime = generateRuntime(this.vfs.index);
+      const importMap = JSON.stringify(this.vfs.getImportMap());
+
+      // Inject runtime and import map into HTML
+      const injectStr =
+        `<script type="importmap">${importMap}</` + `script>` +
+        `<script>${runtime}</` + `script>`;
+
+      let finalHTML;
+      const headIdx = processedHTML.toLowerCase().indexOf('<head>');
+      if (headIdx !== -1) {
+        finalHTML = processedHTML.slice(0, headIdx + 6) + injectStr + processedHTML.slice(headIdx + 6);
+      } else {
+        finalHTML = injectStr + processedHTML;
+      }
+
+      // Create iframe with srcdoc (same origin, real localStorage/IndexedDB)
+      this.frame.srcdoc = finalHTML;
+      this._setStatus('Game loaded — localStorage should work');
+
+    } catch (err) {
+      this._setStatus('Error: ' + err.message);
+      console.error('[fjam]', err);
+    }
+  }
+
+  async pack(fileList) {
+    this._setStatus('Packing ' + fileList.length + ' files...');
+    try {
+      await packJam(fileList);
+      this._setStatus('Packed successfully');
+    } catch (err) {
+      this._setStatus('Pack error: ' + err.message);
+    }
+  }
+
+  _cleanup() {
+    if (this.vfs) {
+      this.vfs.destroy();
+      this.vfs = null;
+    }
+    this.frame.srcdoc = '';
+  }
+
+  _setupEvents() {
+    // Button events
+    document.getElementById('openBtn').onclick = () => {
+      document.getElementById('jamInput').click();
+    };
+    document.getElementById('packBtn').onclick = () => {
+      document.getElementById('folderInput').click();
+    };
+
+    // File input events
+    document.getElementById('jamInput').onchange = (e) => {
+      const file = e.target.files[0];
+      if (file) this.open(file);
+      e.target.value = '';
+    };
+    document.getElementById('folderInput').onchange = (e) => {
+      const files = Array.from(e.target.files).map(f => ({
+        path: f.webkitRelativePath || f.name,
+        file: f
+      }));
+      if (files.length) this.pack(files);
+      e.target.value = '';
+    };
+
+    // Drag and drop
+    let dragCounter = 0;
+
+    document.addEventListener('dragenter', (e) => {
+      e.preventDefault();
+      dragCounter++;
+      this.dropEl.classList.add('over');
+    });
+
+    document.addEventListener('dragleave', (e) => {
+      e.preventDefault();
+      dragCounter--;
+      if (dragCounter === 0) this.dropEl.classList.remove('over');
+    });
+
+    document.addEventListener('dragover', (e) => e.preventDefault());
+
+    document.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      dragCounter = 0;
+      this.dropEl.classList.remove('over');
+
+      const items = Array.from(e.dataTransfer.items);
+      const files = [];
+
+      // Handle dropped items (files or directories)
+      for (const item of items) {
+        const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+        if (entry) {
+          await this._walkEntry(entry, '', files);
+        } else {
+          const file = item.getAsFile();
+          if (file) files.push({ path: file.name, file });
+        }
+      }
+
+      if (files.length === 1 && files[0].path.endsWith('.jam')) {
+        this.open(files[0].file);
+      } else if (files.length > 0) {
+        this.pack(files);
+      }
+    });
+  }
+
+  async _walkEntry(entry, path, out) {
+    if (entry.isFile) {
+      const file = await new Promise(resolve => entry.file(resolve));
+      out.push({ path: path + entry.name, file });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      const entries = await new Promise(resolve => {
+        const all = [];
+        const readBatch = () => {
+          reader.readEntries(batch => {
+            if (batch.length) {
+              all.push(...batch);
+              readBatch();
+            } else {
+              resolve(all);
+            }
+          });
+        };
+        readBatch();
+      });
+      for (const child of entries) {
+        await this._walkEntry(child, path + entry.name + '/', out);
+      }
+    }
+  }
+}
+
+// ── Boot ────────────────────────────────────────────────────────
+new Fjam();
+</script>
+</body>
+</html>
