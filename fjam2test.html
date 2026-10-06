@@ -5,25 +5,20 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>f(jam)</title>
 <style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{height:100vh;display:flex;flex-direction:column;font-family:monospace;background:#0a0a0a;color:#e0e0e0;overflow:hidden}
-#ui{padding:8px;display:flex;gap:8px;align-items:center;background:#111;border-bottom:1px solid #333;flex-shrink:0}
-#ui button{padding:6px 12px;background:#222;border:1px solid #444;color:#ccc;border-radius:4px;cursor:pointer;font-family:inherit;font-size:12px}
-#ui button:hover{background:#333;color:#fff}
-#status{margin-left:auto;font-size:11px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#frame{flex:1;border:none;width:100%;background:#000}
-#drop{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.8);z-index:999;font-size:14px;color:#666;pointer-events:none;opacity:0;transition:opacity .2s}
-#drop.over{opacity:1}
+*{margin:0;padding:0}
+body{height:100vh;display:flex;flex-direction:column;overflow:hidden}
+#bar{display:flex;align-items:center;gap:8px;padding:8px}
+#status{margin-left:auto;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:60%}
+#frame{flex:1;border:none}
 </style>
 </head>
 <body>
-<div id="ui">
-  <button id="openBtn">Open .JAM</button>
-  <button id="packBtn">Pack Folder</button>
+<div id="bar">
+  <button id="openBtn">run</button>
+  <button id="packBtn">pack</button>
   <span id="status">Ready — drop a .JAM or folder</span>
 </div>
 <iframe id="frame"></iframe>
-<div id="drop">Drop .JAM file or folder here</div>
 <input type="file" id="jamInput" accept=".jam" hidden>
 <input type="file" id="folderInput" webkitdirectory directory multiple hidden>
 
@@ -270,7 +265,7 @@ class VFS {
 
 // ═══════════════════════════════════════════════════════════════
 // MODULE: Loader
-// .JAM file → file map
+// .JAM file → Map<path, Uint8Array>
 // ═══════════════════════════════════════════════════════════════
 async function loadJam(file) {
   const buffer = await file.arrayBuffer();
@@ -286,7 +281,10 @@ async function loadJam(file) {
   const zipData = Base122.decode(payload);
   const files = fflate.unzipSync(zipData);
 
-  return files;
+  // fflate.unzipSync returns a plain object {path: Uint8Array}.
+  // Normalize to a Map here so VFS can use Map iteration (.keys(),
+  // for...of entries). Contract: loadJam ALWAYS returns a Map.
+  return new Map(Object.entries(files));
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -516,7 +514,6 @@ class Fjam {
     this.vfs = null;
     this.frame = document.getElementById('frame');
     this.statusEl = document.getElementById('status');
-    this.dropEl = document.getElementById('drop');
     this._setupEvents();
   }
 
@@ -532,7 +529,7 @@ class Fjam {
 
       // Load and decode
       const files = await loadJam(file);
-      this._setStatus('Decoded ' + Object.keys(files).length + ' files');
+      this._setStatus('Decoded ' + files.size + ' files');
 
       // Build VFS
       this.vfs = new VFS(files);
@@ -617,26 +614,10 @@ class Fjam {
     };
 
     // Drag and drop
-    let dragCounter = 0;
-
-    document.addEventListener('dragenter', (e) => {
-      e.preventDefault();
-      dragCounter++;
-      this.dropEl.classList.add('over');
-    });
-
-    document.addEventListener('dragleave', (e) => {
-      e.preventDefault();
-      dragCounter--;
-      if (dragCounter === 0) this.dropEl.classList.remove('over');
-    });
-
     document.addEventListener('dragover', (e) => e.preventDefault());
 
     document.addEventListener('drop', async (e) => {
       e.preventDefault();
-      dragCounter = 0;
-      this.dropEl.classList.remove('over');
 
       const items = Array.from(e.dataTransfer.items);
       const files = [];
