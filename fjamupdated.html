@@ -27,7 +27,6 @@ import * as fflate from 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm';
 
 // ═══════════════════════════════════════════════════════════════
 // MODULE: Base122 Codec
-// Binary ↔ text encoding that avoids HTML-unsafe bytes
 // ═══════════════════════════════════════════════════════════════
 const Base122 = (() => {
   const ILLEGAL = [0, 10, 13, 34, 38, 92];
@@ -46,7 +45,6 @@ const Base122 = (() => {
         const b = (acc >>> bits) & 0x7F;
         const il = ILLEGAL_MAP[b];
         if (il !== -1) {
-          // This byte is illegal, escape it with the next byte
           let next = -1;
           if (bits < 7 && i + 1 < data.length) {
             acc = (acc << 8) | data[++i];
@@ -68,7 +66,6 @@ const Base122 = (() => {
         }
       }
     }
-    // Handle remaining bits
     if (bits > 0) {
       const b = (acc << (7 - bits)) & 0x7F;
       const il = ILLEGAL_MAP[b];
@@ -89,7 +86,6 @@ const Base122 = (() => {
     for (let i = 0; i < data.length; i++) {
       const c = data[i];
       if (c > 127) {
-        // Two-byte escape sequence
         const il = (c >>> 2) & 7;
         const next = data[++i] & 0x3F;
         if (il !== 7) {
@@ -141,19 +137,17 @@ function lookupMime(path) {
 
 // ═══════════════════════════════════════════════════════════════
 // MODULE: VFS (Virtual File System)
-// Creates blob URLs and provides path resolution
 // ═══════════════════════════════════════════════════════════════
 class VFS {
   constructor(files) {
-    this.blobs = new Map();      // path → blob URL
-    this.index = new Map();      // lookup key → blob URL
+    this.blobs = new Map();
+    this.index = new Map();
     this.importMap = { imports: {} };
     this.entryPath = null;
     this._build(files);
   }
 
   _build(files) {
-    // Find entry HTML (prefer root index.html)
     const htmlPaths = [];
     for (const path of files.keys()) {
       if (/\.html?$/i.test(path)) htmlPaths.push(path);
@@ -166,12 +160,10 @@ class VFS {
     });
     this.entryPath = htmlPaths.find(p => /(^|\/)index\.html?$/i.test(p)) || htmlPaths[0];
 
-    // Determine base directory (for relative resolution)
     const baseDir = this.entryPath && this.entryPath.includes('/')
       ? this.entryPath.substring(0, this.entryPath.lastIndexOf('/') + 1)
       : '';
 
-    // Create blob URLs and build index
     for (const [path, data] of files) {
       if (path.endsWith('/') || path.includes('__MACOSX') || path.endsWith('.DS_Store')) continue;
 
@@ -182,15 +174,13 @@ class VFS {
 
       this.blobs.set(cleanPath, url);
 
-      // Build lookup index with multiple path forms
       const forms = new Set([
         cleanPath,
         '/' + cleanPath,
         './' + cleanPath,
-        cleanPath.split('/').pop(),  // filename only
+        cleanPath.split('/').pop(),
       ]);
 
-      // Add base-relative forms
       if (baseDir && cleanPath.startsWith(baseDir)) {
         const rel = cleanPath.substring(baseDir.length);
         forms.add(rel);
@@ -198,14 +188,12 @@ class VFS {
         forms.add('./' + rel);
       }
 
-      // Add .part1 variants (Unity uses these)
       forms.add(cleanPath + '.part1');
 
       for (const form of forms) {
         if (!this.index.has(form)) this.index.set(form, url);
       }
 
-      // Build import map for JS/WASM modules
       if (/\.(m?js|wasm)$/i.test(cleanPath)) {
         const specifiers = [
           cleanPath,
@@ -230,19 +218,21 @@ class VFS {
     if (!url || typeof url !== 'string') return url;
     if (url.startsWith('blob:') || url.startsWith('data:')) return url;
 
-    // Direct lookup
     if (this.index.has(url)) return this.index.get(url);
 
-    // Parse as URL relative to virtual root
     try {
       const parsed = new URL(url, 'http://vfs.local/');
       const path = decodeURIComponent(parsed.pathname).replace(/^\//, '');
       if (this.index.has(path)) return this.index.get(path);
       const filename = path.split('/').pop();
       if (this.index.has(filename)) return this.index.get(filename);
-    } catch (e) { /* pass through */ }
+    } catch (e) {}
 
-    return url; // Not found, return as-is
+    return null; // Not a local file
+  }
+
+  isLocal(url) {
+    return this.resolve(url) !== null;
   }
 
   getEntryHTML() {
@@ -265,13 +255,11 @@ class VFS {
 
 // ═══════════════════════════════════════════════════════════════
 // MODULE: Loader
-// .JAM file → Map<path, Uint8Array>
 // ═══════════════════════════════════════════════════════════════
 async function loadJam(file) {
   const buffer = await file.arrayBuffer();
   const view = new DataView(buffer);
 
-  // Validate magic
   if (view.getUint32(0, false) !== 0x4A414D00) {
     throw new Error('Invalid .JAM file');
   }
@@ -281,15 +269,11 @@ async function loadJam(file) {
   const zipData = Base122.decode(payload);
   const files = fflate.unzipSync(zipData);
 
-  // fflate.unzipSync returns a plain object {path: Uint8Array}.
-  // Normalize to a Map here so VFS can use Map iteration (.keys(),
-  // for...of entries). Contract: loadJam ALWAYS returns a Map.
   return new Map(Object.entries(files));
 }
 
 // ═══════════════════════════════════════════════════════════════
 // MODULE: Packer
-// Folder → .JAM file
 // ═══════════════════════════════════════════════════════════════
 async function packJam(fileList) {
   const map = {};
@@ -302,7 +286,7 @@ async function packJam(fileList) {
 
   const zipData = fflate.zipSync(map, { level: 1 });
   const payload = Base122.encode(zipData);
-  const header = new Uint8Array([74, 65, 77, 0]); // 'JAM\0'
+  const header = new Uint8Array([74, 65, 77, 0]);
   const length = new Uint8Array(4);
   new DataView(length.buffer).setUint32(0, payload.length, true);
 
@@ -318,26 +302,25 @@ async function packJam(fileList) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MODULE: Runtime Template
-// Minimal interception code injected into the iframe.
-// Only patches what's necessary for dynamic resource loading.
+// MODULE: Runtime
+// Minimal interception — only rewrites local VFS URLs.
+// External network communication (WebSocket, fetch to servers, XHR
+// to APIs) passes through COMPLETELY untouched.
 // ═══════════════════════════════════════════════════════════════
 function generateRuntime(vfsIndex) {
-  // Serialize VFS index for the iframe
   const serializedIndex = JSON.stringify([...vfsIndex]);
 
   return `
 (function() {
   'use strict';
 
-  // ── VFS Index ──────────────────────────────────────────────
   const INDEX = new Map(${serializedIndex});
 
-  // ── URL Resolver ───────────────────────────────────────────
   function resolve(url) {
-    if (!url || typeof url !== 'string') return url;
+    if (!url || typeof url !== 'string') return null;
     if (url.startsWith('blob:') || url.startsWith('data:')) return url;
-    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+    if (url.startsWith('http://') || url.startsWith('https://')) return null;
+    if (url.startsWith('ws://') || url.startsWith('wss://')) return null;
 
     if (INDEX.has(url)) return INDEX.get(url);
 
@@ -349,50 +332,56 @@ function generateRuntime(vfsIndex) {
       if (INDEX.has(filename)) return INDEX.get(filename);
     } catch (e) {}
 
-    return url;
+    return null;
   }
 
-  // ── Base URI Fix ───────────────────────────────────────────
-  // srcdoc iframes have 'about:srcdoc' as base URI, which breaks
-  // URL construction. Give games a valid virtual base.
-  try {
-    Object.defineProperty(document, 'baseURI', {
-      get: () => 'http://vfs.local/',
-      configurable: true
-    });
-  } catch (e) {}
+  function isLocal(url) {
+    return resolve(url) !== null;
+  }
 
-  // ── Fetch Interception ─────────────────────────────────────
+  // ── Fetch: only intercept LOCAL file requests ──────────────
   const _fetch = window.fetch;
   window.fetch = function(input, init) {
     const url = input instanceof Request ? input.url : input;
+
+    // Only rewrite if this is a local VFS file
     const resolved = resolve(url);
-    if (resolved !== url) {
+    if (resolved && resolved !== url) {
       if (input instanceof Request) {
         return _fetch(new Request(resolved, input), init);
       }
       return _fetch(resolved, init);
     }
+
+    // External URL or unresolvable — pass through untouched
     return _fetch(input, init);
   };
 
-  // ── XHR Interception ───────────────────────────────────────
+  // ── XHR: only intercept LOCAL file requests ────────────────
   const _xhrOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-    return _xhrOpen.call(this, method, resolve(url), ...rest);
+    const resolved = resolve(url);
+    if (resolved && resolved !== url) {
+      return _xhrOpen.call(this, method, resolved, ...rest);
+    }
+    return _xhrOpen.call(this, method, url, ...rest);
   };
 
-  // ── Element Property Interception ──────────────────────────
-  // Catches dynamically created <img>, <script>, <link>, etc.
-  const _origSet = Object.getOwnPropertyDescriptor(Element.prototype, 'setAttribute');
-
+  // ── Element properties: only rewrite LOCAL URLs ────────────
   function patchProperty(ctor, prop) {
     if (!ctor) return;
     const desc = Object.getOwnPropertyDescriptor(ctor.prototype, prop);
     if (!desc || !desc.set) return;
 
     Object.defineProperty(ctor.prototype, prop, {
-      set: function(v) { desc.set.call(this, resolve(v)); },
+      set: function(v) {
+        const resolved = resolve(v);
+        if (resolved) {
+          desc.set.call(this, resolved);
+        } else {
+          desc.set.call(this, v);
+        }
+      },
       get: desc.get,
       configurable: true
     });
@@ -407,40 +396,31 @@ function generateRuntime(vfsIndex) {
   patchProperty(HTMLAudioElement, 'src');
   patchProperty(HTMLObjectElement, 'data');
 
-  // ── setAttribute Interception ──────────────────────────────
+  // ── setAttribute: only rewrite LOCAL URLs ──────────────────
+  const _origSet = Object.getOwnPropertyDescriptor(Element.prototype, 'setAttribute');
   Element.prototype.setAttribute = function(name, value) {
     const lower = name.toLowerCase();
     if (lower === 'src' || lower === 'href' || lower === 'data') {
-      return _origSet.value.call(this, name, resolve(value));
+      const resolved = resolve(value);
+      if (resolved) {
+        return _origSet.value.call(this, name, resolved);
+      }
     }
     return _origSet.value.call(this, name, value);
   };
 
-  // ── Worker Interception ────────────────────────────────────
+  // ── Worker: only rewrite LOCAL URLs ────────────────────────
   const _Worker = window.Worker;
   window.Worker = function(url, options) {
     const resolved = resolve(url);
-    if (resolved !== url) {
-      // If it's a blob URL, we need to wrap it with importScripts/fetch interception
-      if (resolved.startsWith('blob:')) {
-        return _Worker(resolved, options);
-      }
+    if (resolved && resolved !== url) {
       return new _Worker(resolved, options);
     }
     return new _Worker(url, options);
   };
   window.Worker.prototype = _Worker.prototype;
 
-  // ── Audio Interception ─────────────────────────────────────
-  const _Audio = window.Audio;
-  window.Audio = function(src) {
-    return src ? new _Audio(resolve(src)) : new _Audio();
-  };
-  window.Audio.prototype = _Audio.prototype;
-
   // ── Framebust Protection ───────────────────────────────────
-  // Some games check if they're in an iframe and try to escape.
-  // Make them think they're top-level.
   try {
     Object.defineProperty(window, 'top', {
       get: () => window.self,
@@ -456,20 +436,19 @@ function generateRuntime(vfsIndex) {
     });
   } catch (e) {}
 
-  console.log('[fjam] runtime active — localStorage:', typeof localStorage !== 'undefined' ? 'OK' : 'FAIL');
+  console.log('[fjam] network-transparent runtime active');
 })();
 `;
 }
 
 // ═══════════════════════════════════════════════════════════════
 // MODULE: HTML Processor
-// Rewrites URLs in HTML to blob URLs
 // ═══════════════════════════════════════════════════════════════
 async function processHTML(html, vfs) {
-  // 1. Remove <base> tags (they'd break our URL resolution)
+  // Remove <base> tags
   html = html.replace(/<base\b[^>]*\/?>/gi, '');
 
-  // 2. Extract script contents to protect from URL rewriting
+  // Extract scripts
   const scripts = [];
   html = html.replace(
     /<script([^>]*)>([\s\S]*?)<\/script>/gi,
@@ -479,25 +458,25 @@ async function processHTML(html, vfs) {
     }
   );
 
-  // 3. Rewrite src/href/data attributes
+  // Rewrite src/href/data attributes
   html = html.replace(
     /((?:src|href|data)\s*=\s*["'])([^"']+)(["'])/gi,
     (match, pre, url, post) => {
       const resolved = vfs.resolve(url);
-      return resolved !== url ? pre + resolved + post : match;
+      return resolved ? pre + resolved + post : match;
     }
   );
 
-  // 4. Rewrite CSS url() references
+  // Rewrite CSS url() references
   html = html.replace(
     /(url\(\s*["']?)([^"')]+)(["']?\s*\))/gi,
     (match, pre, url, post) => {
       const resolved = vfs.resolve(url);
-      return resolved !== url ? pre + resolved + post : match;
+      return resolved ? pre + resolved + post : match;
     }
   );
 
-  // 5. Restore script contents
+  // Restore scripts
   html = html.replace(
     /\x00SCRIPT(\d+)\x00/g,
     (match, i) => scripts[parseInt(i)]
@@ -507,7 +486,7 @@ async function processHTML(html, vfs) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MODULE: Fjam Orchestrator (Frontend)
+// MODULE: Fjam Orchestrator
 // ═══════════════════════════════════════════════════════════════
 class Fjam {
   constructor() {
@@ -527,28 +506,22 @@ class Fjam {
       this._setStatus('Loading ' + file.name + '...');
       this._cleanup();
 
-      // Load and decode
       const files = await loadJam(file);
       this._setStatus('Decoded ' + files.size + ' files');
 
-      // Build VFS
       this.vfs = new VFS(files);
       this._setStatus('VFS ready');
 
-      // Get entry HTML
       const entryURL = this.vfs.getEntryHTML();
       if (!entryURL) throw new Error('No HTML entry found');
 
-      // Fetch and process HTML
       const response = await fetch(entryURL);
       const rawHTML = await response.text();
       const processedHTML = await processHTML(rawHTML, this.vfs);
 
-      // Generate runtime
       const runtime = generateRuntime(this.vfs.index);
       const importMap = JSON.stringify(this.vfs.getImportMap());
 
-      // Inject runtime and import map into HTML
       const injectStr =
         `<script type="importmap">${importMap}</` + `script>` +
         `<script>${runtime}</` + `script>`;
@@ -561,9 +534,8 @@ class Fjam {
         finalHTML = injectStr + processedHTML;
       }
 
-      // Create iframe with srcdoc (same origin, real localStorage/IndexedDB)
       this.frame.srcdoc = finalHTML;
-      this._setStatus('Game loaded — localStorage should work');
+      this._setStatus('Game loaded');
 
     } catch (err) {
       this._setStatus('Error: ' + err.message);
@@ -590,7 +562,6 @@ class Fjam {
   }
 
   _setupEvents() {
-    // Button events
     document.getElementById('openBtn').onclick = () => {
       document.getElementById('jamInput').click();
     };
@@ -598,7 +569,6 @@ class Fjam {
       document.getElementById('folderInput').click();
     };
 
-    // File input events
     document.getElementById('jamInput').onchange = (e) => {
       const file = e.target.files[0];
       if (file) this.open(file);
@@ -613,7 +583,6 @@ class Fjam {
       e.target.value = '';
     };
 
-    // Drag and drop
     document.addEventListener('dragover', (e) => e.preventDefault());
 
     document.addEventListener('drop', async (e) => {
@@ -622,7 +591,6 @@ class Fjam {
       const items = Array.from(e.dataTransfer.items);
       const files = [];
 
-      // Handle dropped items (files or directories)
       for (const item of items) {
         const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
         if (entry) {
@@ -668,7 +636,6 @@ class Fjam {
   }
 }
 
-// ── Boot ────────────────────────────────────────────────────────
 new Fjam();
 </script>
 </body>
