@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>ROM Library</title>
+
+    <!--
+      Minimal CSS: Nunito Bold, pure black/white, hover inversion.
+      Everything else is structural only.
+    -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@700&display=swap');
+
+        * {
+            font-family: 'Nunito', sans-serif;
+            font-weight: 700;
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 24px;
+            background: #fff;
+            color: #000;
+        }
+
+        /* The grid of square tiles */
+        #grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 12px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .tile {
+            aspect-ratio: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 12px;
+            border: 2px solid #000;
+            background: #fff;
+            color: #000;
+            font-size: 16px;
+            line-height: 1.3;
+            cursor: pointer;
+            user-select: none;
+            word-break: break-word;
+            overflow: hidden;
+            transition: none; /* instant inversion, no animation */
+        }
+
+        .tile:hover {
+            background: #000;
+            color: #fff;
+        }
+
+        /* Back tile — same style, just different content */
+        .tile.back {
+            border-style: dashed;
+        }
+
+        /* The upload button, styled to match */
+        #upload-label {
+            display: block;
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto 24px;
+            padding: 16px;
+            border: 2px solid #000;
+            background: #fff;
+            color: #000;
+            text-align: center;
+            font-size: 18px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        #upload-label:hover {
+            background: #000;
+            color: #fff;
+        }
+
+        #upload-input {
+            display: none;
+        }
+
+        /* Player area — hidden until a game is launched */
+        #player {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: #fff;
+            z-index: 10;
+        }
+
+        #player.active {
+            display: block;
+        }
+
+        /* Back button when in player view */
+        #player-back {
+            position: fixed;
+            top: 16px;
+            left: 16px;
+            z-index: 20;
+            padding: 12px 20px;
+            border: 2px solid #fff;
+            background: #000;
+            color: #fff;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        #player-back:hover {
+            background: #fff;
+            color: #000;
+            border-color: #000;
+        }
+
+        /* Container where engines render */
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #game-container > * {
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        #game-container iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        /* Status line for errors / info */
+        #status {
+            max-width: 1200px;
+            margin: 16px auto 0;
+            font-size: 14px;
+            color: #000;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Folder upload: webkitdirectory gives us File objects with webkitRelativePath -->
+    <label id="upload-label" for="upload-input">SELECT FOLDER</label>
+    <input type="file" id="upload-input" webkitdirectory multiple>
+
+    <!-- Core grid and game grid both render here -->
+    <div id="grid"></div>
+
+    <!-- Status message area -->
+    <div id="status"></div>
+
+    <!-- Fullscreen player overlay -->
+    <div id="player">
+        <button id="player-back">← BACK</button>
+        <div id="game-container"></div>
+    </div>
+
+    <script>
+    (() => {
+        "use strict";
+
+        /* ==================================================================
+         * MODULE 1: CONFIG
+         * All external URLs and tunable constants live here.
+         * ================================================================== */
+        const CONFIG = {
+            emulatorJS: {
+                // EmulatorJS 4.0+ CDN paths.
+                // Swap "stable" for "latest" or "nightly" if needed.
+                pathtodata: "https://cdn.emulatorjs.org/stable/data/",
+                loaderUrl:  "https://cdn.emulatorjs.org/stable/data/loader.js",
+                container:  "#game-container"
+            },
+            ruffle: {
+                // Ruffle's official "website package" script.
+                scriptUrl: "https://unpkg.com/@ruffle-rs/ruffle"
+            },
+            maxFilenameDisplay: 40
+        };
+
+        /* ==================================================================
+         * MODULE 2: EXTENSION_TO_CORE
+         * The ONLY place you edit to add or remap systems.
+         *
+         * Key:   lowercase file extension (no dot)
+         * Value: EmulatorJS core name, OR "ruffle" for .swf,
+         *        OR "html" for .html files.
+         *
+         * To add a custom core later, add a line here and write
+         * a corresponding start*() function in MODULE 5.
+         * ================================================================== */
+        const EXTENSION_TO_CORE = {
+            // Nintendo
+            "nes":  "nes",
+            "sfc":  "snes",
+            "smc":  "snes",
+            "fig":  "snes",
+            "n64":  "n64",
+            "v64":  "n64",
+            "z64":  "n64",
+            "nds":  "nds",
+            "gba":  "gba",
+            "gb":   "gb",
+            "gbc":  "gb",
+            "vb":   "virtualboy",
+
+            // Sega
+            "md":   "segaMD",
+            "gen":  "segaMD",
+            "smd":  "segaMD",
+            "68k":  "segaMD",
+            "sms":  "segaMS",
+            "gg":   "segaGG",
+            "32x":  "sega32x",
+            "cue":  "segaCD",
+            "iso":  "segaSaturn",
+            "img":  "segaSaturn",
+
+            // Sony
+            "pbp":  "psx",
+            "chd":  "psx",
+            "ccd":  "psx",
+            "toc":  "psx",
+            "m3u":  "psx",
+
+            // Atari
+            "a26":  "atari2600",
+            "a78":  "atari7800",
+            "a52":  "atari5200",
+            "jag":  "jaguar",
+            "j64":  "jaguar",
+            "lnx":  "atariLynx",
+
+            // Arcade / MAME
+            "zip":  "arcade",
+            "7z":   "arcade",
+
+            // Commodore
+            "d64":  "vice_x64",
+            "t64":  "vice_x64",
+            "prg":  "vice_x64",
+
+            // Misc
+            "col":  "colecoVision",
+
+            // Flash → Ruffle
+            "swf":  "ruffle",
+
+            // HTML → iframe
+            "html": "html",
+            "htm":  "html"
+        };
+
+        /* ==================================================================
+         * MODULE 3: FileUtils
+         * Pure functions for scanning, detecting, and preparing blob URLs.
+         * No DOM access, no side effects beyond blob URL creation.
+         * ================================================================== */
+
+        /**
+         * Returns the core/system name for a filename, or null.
+         * Pure function — trivially testable.
+         */
+        const detectCore = (filename) => {
+            const dot = filename.lastIndexOf(".");
+            if (dot === -1) return null;
+            const ext = filename.slice(dot + 1).toLowerCase();
+            return Object.prototype.hasOwnProperty.call(EXTENSION_TO_CORE, ext)
+                ? EXTENSION_TO_CORE[ext]
+                : null;
+        };
+
+        /**
+         * Resolves a relative path against a base directory.
+         * Handles "./" and "../" segments correctly.
+         * baseDir: "games/sub/" (must end with /)
+         * relPath: "./assets/script.js" or "../img.png"
+         * Returns: "games/sub/assets/script.js"
+         */
+        function resolveRelativePath(baseDir, relPath) {
+            // Remove leading "./"
+            let cleaned = relPath.replace(/^\.\//, "");
+            // Combine and split into segments
+            const combined = baseDir + cleaned;
+            const segments = combined.split("/");
+            const resolved = [];
+
+            for (const seg of segments) {
+                if (seg === "" || seg === ".") continue;
+                if (seg === "..") {
+                    resolved.pop();
+                } else {
+                    resolved.push(seg);
+                }
+            }
+            return resolved.join("/");
+        }
+
+        /**
+         * Scans a FileList from a webkitdirectory input and builds:
+         * 1. A blobUrlMap: relativePath → blobUrl (for all files)
+         * 2. A library: Map<coreName, Array<{name, path, blobUrl, file}>>
+         *
+         * For .html files, a second pass rewrites relative src/href
+         * references to blob URLs, so multi-file HTML games work.
+         */
+        async function scanFolder(fileList) {
+            const files = Array.from(fileList);
+            const blobUrlMap = new Map();
+            const library = new Map();
+
+            // --- Pass 1: create blob URLs for every file ---
+            for (const file of files) {
+                const path = file.webkitRelativePath || file.name;
+                const blobUrl = URL.createObjectURL(file);
+                blobUrlMap.set(path, blobUrl);
+            }
+
+            // --- Pass 2: build the library, rewriting HTML files ---
+            for (const file of files) {
+                const path = file.webkitRelativePath || file.name;
+                const core = detectCore(file.name);
+
+                if (core === null) continue; // unsupported, skip silently
+
+                let blobUrl = blobUrlMap.get(path);
+
+                // For HTML files, rewrite relative references
+                if (core === "html") {
+                    blobUrl = await rewriteHtmlFile(file, path, blobUrlMap);
+                }
+
+                const entry = {
+                    name: file.name,
+                    path: path,
+                    blobUrl: blobUrl,
+                    file: file,
+                    core: core
+                };
+
+                if (!library.has(core)) {
+                    library.set(core, []);
+                }
+                library.get(core).push(entry);
+            }
+
+            return { library, blobUrlMap };
+        }
+
+        /**
+         * Reads an HTML file's text, replaces relative src/href
+         * attributes with blob URLs from the map, and returns a new
+         * blob URL for the modified HTML.
+         */
+        async function rewriteHtmlFile(file, htmlPath, blobUrlMap) {
+            try {
+                const text = await file.text();
+
+                // Get the directory of this HTML file
+                const lastSlash = htmlPath.lastIndexOf("/");
+                const baseDir = lastSlash === -1 ? "" : htmlPath.slice(0, lastSlash + 1);
+
+                // Regex to find src="..." or href="..." attributes.
+                // Captures: (attribute name, quote char, value)
+                const attrRegex = /\b(src|href)\s*=\s*(["'])([^"']+)\2/gi;
+
+                const rewritten = text.replace(attrRegex, (match, attr, quote, value) => {
+                    // Skip absolute URLs, data URIs, blob URLs, anchors, and JS
+                    if (/^(https?:|\/\/|data:|blob:|#|javascript:|mailto:)/i.test(value)) {
+                        return match;
+                    }
+
+                    // Resolve the relative path
+                    const resolvedPath = resolveRelativePath(baseDir, value);
+
+                    // Look up in the blob map
+                    const blobUrl = blobUrlMap.get(resolvedPath);
+                    if (blobUrl) {
+                        return `${attr}=${quote}${blobUrl}${quote}`;
+                    }
+
+                    // Not found — leave as-is (might be a broken ref anyway)
+                    return match;
+                });
+
+                // Create a new blob with the rewritten HTML
+                const blob = new Blob([rewritten], { type: "text/html" });
+                return URL.createObjectURL(blob);
+
+            } catch (err) {
+                console.warn("Could not rewrite HTML file:", htmlPath, err);
+                // Fall back to the original blob URL
+                return blobUrlMap.get(htmlPath);
+            }
+        }
+
+        /* ==================================================================
+         * MODULE 4: StateManager
+         * Owns the current view and navigation state.
+         * ================================================================== */
+        const state = {
+            library: null,      // Map<core, entries[]>
+            blobUrlMap: null,   // Map<path, blobUrl>
+            view: "upload",     // "upload" | "cores" | "games" | "player"
+            currentSystem: null,
+            currentGame: null
+        };
+
+        /* ==================================================================
+         * MODULE 5: Loaders
+         * Each engine is a self-contained async function.
+         * To add a new engine: write a start*() function and add a
+         * branch in dispatchToLoader() below.
+         * ================================================================== */
+
+        // Cached script loader (prevents double-injection)
+        const loadedScripts = new Set();
+        function loadScript(url) {
+            return new Promise((resolve, reject) => {
+                if (loadedScripts.has(url)) return resolve();
+                const s = document.createElement("script");
+                s.src = url;
+                s.async = true;
+                s.onload = () => { loadedScripts.add(url); resolve(); };
+                s.onerror = () => reject(new Error("Failed to load: " + url));
+                document.head.appendChild(s);
+            });
+        }
+
+        /**
+         * EmulatorJS: sets globals and injects loader.js.
+         */
+        async function startEmulatorJS(blobUrl, core) {
+            window.EJS_player     = CONFIG.emulatorJS.container;
+            window.EJS_core       = core;
+            window.EJS_gameUrl    = blobUrl;
+            window.EJS_pathtodata = CONFIG.emulatorJS.pathtodata;
+
+            // EmulatorJS is a one-shot bootstrap. If already loaded,
+            // we must reload the shell to re-embed.
+            if (loadedScripts.has(CONFIG.emulatorJS.loaderUrl)) {
+                sessionStorage.setItem("_ejs_return", JSON.stringify({
+                    blobUrl: blobUrl,
+                    core: core
+                }));
+                location.reload();
+                return;
+            }
+
+            await loadScript(CONFIG.emulatorJS.loaderUrl);
+        }
+
+        /**
+         * Ruffle: uses the documented JS API.
+         */
+        async function startRuffle(blobUrl) {
+            await loadScript(CONFIG.ruffle.scriptUrl);
+
+            const ruffle = window.RufflePlayer.newest();
+            const player = ruffle.createPlayer();
+            const host = document.getElementById("game-container");
+
+            host.replaceChildren(player);
+            player.ruffle().load(blobUrl);
+        }
+
+        /**
+         * HTML: loads the (possibly rewritten) blob URL in an iframe.
+         */
+        async function startHtmlFile(blobUrl) {
+            const host = document.getElementById("game-container");
+            const iframe = document.createElement("iframe");
+            iframe.src = blobUrl;
+            iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-pointer-lock");
+            host.replaceChildren(iframe);
+        }
+
+        /**
+         * Dispatcher: routes a game entry to the right loader.
+         */
+        function dispatchToLoader(entry) {
+            switch (entry.core) {
+                case "ruffle": return startRuffle(entry.blobUrl);
+                case "html":   return startHtmlFile(entry.blobUrl);
+                default:       return startEmulatorJS(entry.blobUrl, entry.core);
+            }
+        }
+
+        /* ==================================================================
+         * MODULE 6: Renderer
+         * Builds and updates the DOM for each view.
+         * ================================================================== */
+        const gridEl = document.getElementById("grid");
+        const playerEl = document.getElementById("player");
+        const playerBack = document.getElementById("player-back");
+        const statusEl = document.getElementById("status");
+        const gameContainer = document.getElementById("game-container");
+
+        function setStatus(msg) {
+            statusEl.textContent = msg || "";
+        }
+
+        function truncateName(name, max) {
+            if (name.length <= max) return name;
+            return name.slice(0, max - 3) + "...";
+        }
+
+        /**
+         * Renders the core grid: one tile per detected system.
+         */
+        function renderCoreGrid() {
+            state.view = "cores";
+            gridEl.replaceChildren();
+            setStatus("Detected " + state.library.size + " system(s). Click a system to browse.");
+
+            // Sort cores alphabetically for consistent ordering
+            const sortedCores = Array.from(state.library.keys()).sort();
+
+            for (const core of sortedCores) {
+                const games = state.library.get(core);
+                const tile = document.createElement("button");
+                tile.className = "tile";
+                tile.textContent = core.toUpperCase() + "\n(" + games.length + ")";
+                tile.addEventListener("click", () => {
+                    state.currentSystem = core;
+                    renderGameGrid(core);
+                });
+                gridEl.appendChild(tile);
+            }
+        }
+
+        /**
+         * Renders the game grid for a specific system.
+         * First tile is always a "back" button to the core grid.
+         */
+        function renderGameGrid(core) {
+            state.view = "games";
+            gridEl.replaceChildren();
+            setStatus("Browsing " + core.toUpperCase() + " — " +
+                      state.library.get(core).length + " file(s).");
+
+            // --- Back tile (always first) ---
+            const backTile = document.createElement("button");
+            backTile.className = "tile back";
+            backTile.textContent = "←\nBACK";
+            backTile.addEventListener("click", () => {
+                renderCoreGrid();
+            });
+            gridEl.appendChild(backTile);
+
+            // --- Game tiles ---
+            const games = state.library.get(core);
+            // Sort by filename for predictable browsing
+            const sorted = [...games].sort((a, b) =>
+                a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+            );
+
+            for (const game of sorted) {
+                const tile = document.createElement("button");
+                tile.className = "tile";
+                tile.textContent = truncateName(game.name, CONFIG.maxFilenameDisplay);
+                tile.title = game.name; // full name on hover
+                tile.addEventListener("click", () => {
+                    launchGame(game);
+                });
+                gridEl.appendChild(tile);
+            }
+        }
+
+        /**
+         * Launches a game: shows the player overlay and dispatches.
+         */
+        function launchGame(entry) {
+            state.view = "player";
+            state.currentGame = entry;
+            gridEl.style.display = "none";
+            playerEl.classList.add("active");
+            setStatus("");
+
+            // Clear previous content
+            gameContainer.replaceChildren();
+
+            dispatchToLoader(entry).catch(err => {
+                console.error("Loader failed:", err);
+                setStatus("Error loading: " + entry.name);
+                // Return to the game grid on failure
+                exitPlayer();
+            });
+        }
+
+        /**
+         * Exits the player and returns to the game grid.
+         */
+        function exitPlayer() {
+            state.view = "games";
+            state.currentGame = null;
+            playerEl.classList.remove("active");
+            gridEl.style.display = "";
+            gameContainer.replaceChildren();
+
+            // Re-render the current system's grid
+            if (state.currentSystem) {
+                renderGameGrid(state.currentSystem);
+            }
+        }
+
+        /* ==================================================================
+         * MODULE 7: Wire-up
+         * Event listeners and the EmulatorJS return-from-reload handler.
+         * ================================================================== */
+
+        // Folder upload handler
+        document.getElementById("upload-input").addEventListener("change", async (e) => {
+            const files = e.target.files;
+            if (!files || files.length === 0) return;
+
+            setStatus("Scanning " + files.length + " files...");
+            gridEl.replaceChildren();
+
+            try {
+                const { library, blobUrlMap } = await scanFolder(files);
+                state.library = library;
+                state.blobUrlMap = blobUrlMap;
+
+                if (library.size === 0) {
+                    setStatus("No supported ROM, SWF, or HTML files found in that folder.");
+                    return;
+                }
+
+                renderCoreGrid();
+            } catch (err) {
+                console.error("Scan failed:", err);
+                setStatus("Error scanning folder: " + err.message);
+            }
+
+            // Allow re-selecting the same folder
+            e.target.value = "";
+        });
+
+        // Player back button
+        playerBack.addEventListener("click", exitPlayer);
+
+        // --- EmulatorJS return-from-reload handler ---
+        // When EmulatorJS is already booted and we need to load a new ROM,
+        // startEmulatorJS() stashes the game info in sessionStorage and
+        // reloads the page. On reload, we pick it up here and auto-launch.
+        (function handleEjsReturn() {
+            const stash = sessionStorage.getItem("_ejs_return");
+            if (stash) {
+                sessionStorage.removeItem("_ejs_return");
+                try {
+                    const { blobUrl, core } = JSON.parse(stash);
+                    // We can't restore the full library from a reload,
+                    // so just show the player with the game running.
+                    state.view = "player";
+                    gridEl.style.display = "none";
+                    playerEl.classList.add("active");
+                    startEmulatorJS(blobUrl, core);
+                } catch (e) {
+                    console.warn("Could not restore EJS session:", e);
+                }
+            }
+        })();
+
+    })();
+    </script>
+</body>
+</html>
