@@ -4,702 +4,528 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>stash</title>
-<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=M+PLUS+1:wght@400&display=swap" rel="stylesheet">
 <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Nunito', sans-serif; font-weight: 700; }
-    body { background: #fff; color: #000; height: 100vh; overflow: hidden; }
+*{box-sizing:border-box;margin:0;padding:0;font-family:'M PLUS 1',sans-serif;font-weight:400}
+:root{--button-icon:url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABAAAAAQAAQMAAABF07nAAAAABlBMVEUAAAA6c7Kt5iEcAAAAAXRSTlMAQObYZgAAAnlJREFUeNrt3bENwyAQQNHrGCujsSqDRJAmltNYQcFIxnm/B736dIKQ+kutuwIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHALQGonVgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKK/R5vYM76X28QqAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABA587K/AoAAAAAAAAAAAAAAAAAwC0ANd5lAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAfwOUOCgBAAAAAAAAAAAAAAAAAAAAAAAsBxgfsY2P+gAAAAAAAAAAAAAAAAAAVgLU6C4DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADcC1Di5xIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDSgBonlgEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAfCUDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABwYcBWGgCM3AEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADweXg8AAAAAAAAAAAAAAAAAAAAAAAAAACAAcBebhOrsQUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHBZwF6asrMCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACwBGDKi9QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACHvQBHYnqM8dqxWQAAAABJRU5ErkJggg==')}
+body{background:#000;color:#fff;height:100vh;overflow:hidden}
 
-    /* Game grid */
-    #grid { display: grid; grid-template-columns: repeat(auto-fill, 160px); gap: 24px; padding: 40px; justify-content: center; align-content: start; height: 100vh; overflow-y: auto; padding-bottom: 100px; }
-    .card { cursor: pointer; width: 160px; text-align: center; }
-    .sq { width: 160px; height: 160px; border: 2px solid #000; margin-bottom: 12px; display: flex; align-items: center; justify-content: center; overflow: hidden; background: #fff; transition: background 0.1s; }
-    .sq img { width: 100%; height: 100%; object-fit: cover; }
-    .card:hover .sq { background: #000; color: #fff; }
-    .card:hover .sq img { opacity: 0.7; filter: brightness(1.5); }
-    .card:hover .title { opacity: 1; }
-    .title { font-size: 13px; opacity: 0.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 8px; transition: opacity 0.1s; }
+#grid{display:grid;grid-template-columns:repeat(auto-fill,160px);gap:24px;padding:40px;justify-content:center;align-content:start;height:100vh;overflow-y:auto;padding-bottom:100px}
+.card{cursor:pointer;width:160px;text-align:center}
+.sq{width:160px;height:160px;border:2px solid #fff;margin-bottom:12px;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#000;color:#fff}
+.sq img{width:100%;height:100%;object-fit:cover}
+.card:hover .sq{background:#fff;color:#000}
+.card:hover .sq img{opacity:.7;filter:brightness(1.5)}
+.title{font-size:13px;opacity:.6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 8px}
+.card:hover .title{opacity:1}
+:fullscreen #island{display:none}
 
-    /* Island container — bottom center */
-    #island { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; padding: 8px; border: 2px solid #000; background: #fff; z-index: 1000; }
-    #island button { border: 2px solid #000; padding: 12px 20px; background: #fff; color: #000; cursor: pointer; font-size: 14px; white-space: nowrap; }
-    #island button:hover { background: #000; color: #fff; }
+#island{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);display:flex;gap:16px;z-index:1000}
+#island button{width:48px;height:48px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0}
+#island button img{width:34px;height:34px;pointer-events:none}
+#btn-upload{background:#e33}
+#btn-pack{background:#33f}
+#btn-fullscreen{background:#3a3}
+#btn-home{background:#ee3}
 
-    /* Player layer */
-    #player-layer { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100vh; background: #fff; z-index: 500; }
-    #player-content { width: 100%; height: 100%; border: none; display: flex; align-items: center; justify-content: center; background: #fff; }
-    #player-content iframe { width: 100%; height: 100%; border: none; }
+#corner-logo{position:fixed;bottom:24px;left:24px;width:60px;height:60px;z-index:999;pointer-events:none}
 
-    /* Status text */
-    #status { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); font-size: 14px; opacity: 0.5; z-index: 999; }
+#player-layer{display:none;position:fixed;inset:0;background:#000;z-index:500}
+#player-content{width:100%;height:100%;border:none;display:flex;align-items:center;justify-content:center;background:#000}
+#player-content iframe{width:100%;height:100%;border:none}
 
-    .hidden { display: none !important; }
+#status{position:fixed;top:20px;left:50%;transform:translateX(-50%);font-size:14px;opacity:.5;z-index:999}
+.hidden{display:none!important}
 </style>
 </head>
 <body>
+<input type="file" id="up" webkitdirectory directory multiple hidden>
+<input type="file" id="pack-up" webkitdirectory directory multiple hidden>
+<div id="status"></div>
+<div id="grid" class="hidden"></div>
+<div id="player-layer"><div id="player-content"></div></div>
+<div id="island">
+    <button id="btn-upload"><img src="fpile.png" alt=""></button>
+    <button id="btn-pack"><img src="fpile.png" alt=""></button>
+    <button id="btn-fullscreen"><img src="fpile.png" alt=""></button>
+    <button id="btn-home"><img src="fpile.png" alt=""></button>
+</div>
+<img id="corner-logo" src="fpile.png" alt="">
 
-    <input type="file" id="up" webkitdirectory directory multiple hidden>
-    <input type="file" id="pack-up" webkitdirectory directory multiple hidden>
+<script type="module">
+import * as fflate from 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm';
 
-    <div id="status"></div>
-    <div id="grid" class="hidden"></div>
+/* ── Base122 Codec ─────────────────────────────────────────── */
+const B122 = (() => {
+    const IL = [0, 10, 13, 34, 38, 92];
+    const MAP = new Int8Array(128).fill(-1);
+    IL.forEach((v, i) => MAP[v] = i);
 
-    <div id="player-layer">
-        <div id="player-content"></div>
-    </div>
-
-    <div id="island">
-        <button id="btn-upload" onclick="document.getElementById('up').click()">upload</button>
-        <button id="btn-pack" onclick="document.getElementById('pack-up').click()">pack</button>
-        <button id="btn-fullscreen" onclick="toggleFullscreen()">fullscreen</button>
-        <button id="btn-home" onclick="goHome()">home</button>
-    </div>
-
-    <script type="module">
-    import * as fflate from 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm';
-
-    /* ═══════════════════════════════════════════════════════════
-     * MODULE: Base122 Codec
-     * Binary ↔ text encoding avoiding HTML-unsafe bytes
-     * ═══════════════════════════════════════════════════════════ */
-    const Base122 = (() => {
-        const ILLEGAL = [0, 10, 13, 34, 38, 92];
-        const ILLEGAL_MAP = new Int8Array(128).fill(-1);
-        ILLEGAL.forEach((v, i) => ILLEGAL_MAP[v] = i);
-
-        function encode(data) {
-            const out = new Uint8Array(data.length * 1.5 + 10);
-            let oi = 0, acc = 0, bits = 0;
-            for (let i = 0; i < data.length; i++) {
-                acc = (acc << 8) | data[i];
-                bits += 8;
-                while (bits >= 7) {
-                    bits -= 7;
-                    const b = (acc >>> bits) & 0x7F;
-                    const il = ILLEGAL_MAP[b];
-                    if (il !== -1) {
-                        let next = -1;
-                        if (bits < 7 && i + 1 < data.length) {
-                            acc = (acc << 8) | data[++i];
-                            bits += 8;
-                        }
-                        if (bits >= 7) {
-                            bits -= 7;
-                            next = (acc >>> bits) & 0x7F;
-                        }
-                        if (next === -1) {
-                            out[oi++] = 0xC2 | (7 << 2) | (b >> 6);
-                            out[oi++] = 0x80 | (b & 0x3F);
-                        } else {
-                            out[oi++] = 0xC2 | (il << 2) | (next >> 6);
-                            out[oi++] = 0x80 | (next & 0x3F);
-                        }
-                    } else {
-                        out[oi++] = b;
-                    }
-                }
-            }
-            if (bits > 0) {
-                const b = (acc << (7 - bits)) & 0x7F;
-                const il = ILLEGAL_MAP[b];
+    function encode(d) {
+        const out = new Uint8Array(d.length * 1.5 + 10);
+        let oi = 0, acc = 0, bits = 0;
+        for (let i = 0; i < d.length; i++) {
+            acc = (acc << 8) | d[i]; bits += 8;
+            while (bits >= 7) {
+                bits -= 7;
+                const b = (acc >>> bits) & 0x7F;
+                const il = MAP[b];
                 if (il !== -1) {
-                    out[oi++] = 0xC2 | (7 << 2) | (b >> 6);
-                    out[oi++] = 0x80 | (b & 0x3F);
-                } else {
-                    out[oi++] = b;
-                }
+                    let next = -1;
+                    if (bits < 7 && i + 1 < d.length) { acc = (acc << 8) | d[++i]; bits += 8; }
+                    if (bits >= 7) { bits -= 7; next = (acc >>> bits) & 0x7F; }
+                    if (next === -1) { out[oi++] = 0xC2 | (7 << 2) | (b >> 6); out[oi++] = 0x80 | (b & 0x3F); }
+                    else { out[oi++] = 0xC2 | (il << 2) | (next >> 6); out[oi++] = 0x80 | (next & 0x3F); }
+                } else out[oi++] = b;
             }
-            return out.subarray(0, oi);
         }
+        if (bits > 0) {
+            const b = (acc << (7 - bits)) & 0x7F;
+            if (MAP[b] !== -1) { out[oi++] = 0xC2 | (7 << 2) | (b >> 6); out[oi++] = 0x80 | (b & 0x3F); }
+            else out[oi++] = b;
+        }
+        return out.subarray(0, oi);
+    }
 
-        function decode(data) {
-            const out = new Uint8Array(data.length);
-            let oi = 0, acc = 0, bits = 0;
-            for (let i = 0; i < data.length; i++) {
-                const c = data[i];
-                if (c > 127) {
-                    const il = (c >>> 2) & 7;
-                    const next = data[++i] & 0x3F;
-                    if (il !== 7) {
-                        acc = (acc << 7) | ILLEGAL[il];
-                        if ((bits += 7) >= 8) out[oi++] = (acc >>> (bits -= 8)) & 0xFF;
-                    }
-                    acc = (acc << 7) | (((c & 1) << 6) | next);
+    function decode(d) {
+        const out = new Uint8Array(d.length);
+        let oi = 0, acc = 0, bits = 0;
+        for (let i = 0; i < d.length; i++) {
+            const c = d[i];
+            if (c > 127) {
+                const il = (c >>> 2) & 7;
+                const next = d[++i] & 0x3F;
+                if (il !== 7) {
+                    acc = (acc << 7) | IL[il];
                     if ((bits += 7) >= 8) out[oi++] = (acc >>> (bits -= 8)) & 0xFF;
-                } else {
-                    acc = (acc << 7) | c;
-                    if ((bits += 7) >= 8) out[oi++] = (acc >>> (bits -= 8)) & 0xFF;
                 }
+                acc = (acc << 7) | (((c & 1) << 6) | next);
+                if ((bits += 7) >= 8) out[oi++] = (acc >>> (bits -= 8)) & 0xFF;
+            } else {
+                acc = (acc << 7) | c;
+                if ((bits += 7) >= 8) out[oi++] = (acc >>> (bits -= 8)) & 0xFF;
             }
-            return out.subarray(0, oi);
         }
-
-        return { encode, decode };
-    })();
-
-    /* ═══════════════════════════════════════════════════════════
-     * MODULE: MIME
-     * ═══════════════════════════════════════════════════════════ */
-    const MIME = {
-        html: 'text/html', htm: 'text/html', css: 'text/css', txt: 'text/plain',
-        js: 'application/javascript', mjs: 'application/javascript',
-        json: 'application/json', wasm: 'application/wasm',
-        png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-        gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp',
-        ico: 'image/x-icon', bmp: 'image/bmp',
-        mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg',
-        m4a: 'audio/mp4', flac: 'audio/flac', aac: 'audio/aac',
-        mp4: 'video/mp4', webm: 'video/webm', ogv: 'video/ogg',
-        ttf: 'font/ttf', woff: 'font/woff', woff2: 'font/woff2', otf: 'font/otf',
-        pck: 'application/octet-stream', unityweb: 'application/octet-stream',
-        bin: 'application/octet-stream', data: 'application/octet-stream',
-        love: 'application/octet-stream', pak: 'application/octet-stream',
-        glb: 'model/gltf-binary', gltf: 'model/gltf+json',
-        xml: 'application/xml', pdf: 'application/pdf',
-        webmanifest: 'application/manifest+json'
-    };
-
-    function lookupMime(path) {
-        let l = path.toLowerCase().replace(/\.part\d+$/, '');
-        if (l.endsWith('.wasm.code.unityweb') || l.endsWith('.wasm.framework.unityweb')) return 'application/wasm';
-        return MIME[l.split('.').pop()] || 'application/octet-stream';
+        return out.subarray(0, oi);
     }
 
-    /* ═══════════════════════════════════════════════════════════
-     * MODULE: VFS
-     * Virtual filesystem for JAM files — blob URLs + path resolution
-     * ═══════════════════════════════════════════════════════════ */
-    class VFS {
-        constructor(files) {
-            this.blobs = new Map();
-            this.index = new Map();
-            this.entryPath = null;
-            this._build(files);
-        }
+    return { encode, decode };
+})();
 
-        _build(files) {
-            const htmlPaths = [];
-            for (const path of files.keys()) {
-                if (/\.html?$/i.test(path)) htmlPaths.push(path);
+/* ── MIME ──────────────────────────────────────────────────── */
+const MIME = {
+    html:'text/html',htm:'text/html',css:'text/css',txt:'text/plain',
+    js:'application/javascript',mjs:'application/javascript',json:'application/json',
+    wasm:'application/wasm',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',
+    gif:'image/gif',svg:'image/svg+xml',webp:'image/webp',ico:'image/x-icon',bmp:'image/bmp',
+    mp3:'audio/mpeg',wav:'audio/wav',ogg:'audio/ogg',m4a:'audio/mp4',
+    mp4:'video/mp4',webm:'video/webm',ogv:'video/ogg',
+    ttf:'font/ttf',woff:'font/woff',woff2:'font/woff2',otf:'font/otf',
+    pck:'application/octet-stream',unityweb:'application/octet-stream',
+    bin:'application/octet-stream',data:'application/octet-stream',
+    love:'application/octet-stream',pak:'application/octet-stream',
+    glb:'model/gltf-binary',gltf:'model/gltf+json',
+    xml:'application/xml',pdf:'application/pdf',webmanifest:'application/manifest+json'
+};
+const mime = p => {
+    let l = p.toLowerCase().replace(/\.part\d+$/, '');
+    if (l.endsWith('.wasm.code.unityweb') || l.endsWith('.wasm.framework.unityweb')) return 'application/wasm';
+    return MIME[l.split('.').pop()] || 'application/octet-stream';
+};
+
+/* ── VFS ───────────────────────────────────────────────────── */
+class VFS {
+    constructor(files) {
+        this.blobs = new Map();
+        this.index = new Map();
+        this.importMap = { imports: {} };
+        this.entry = null;
+
+        const htmls = [...files.keys()].filter(p => /\.html?$/i.test(p));
+        htmls.sort((a, b) => {
+            const aD = a.split('/').length, bD = b.split('/').length;
+            return aD !== bD ? aD - bD : a.length - b.length;
+        });
+        this.entry = htmls.find(p => /(^|\/)index\.html?$/i.test(p)) || htmls[0];
+
+        const base = this.entry?.includes('/') ? this.entry.slice(0, this.entry.lastIndexOf('/') + 1) : '';
+
+        for (const [path, data] of files) {
+            if (path.endsWith('/') || path.includes('__MACOSX') || path.endsWith('.DS_Store')) continue;
+            const cp = path.replace(/\\/g, '/').replace(/^\/+/, '');
+            const url = URL.createObjectURL(new Blob([data], { type: mime(cp) }));
+            this.blobs.set(cp, url);
+
+            const forms = new Set([cp, '/' + cp, './' + cp, cp.split('/').pop()]);
+            if (base && cp.startsWith(base)) {
+                const rel = cp.slice(base.length);
+                forms.add(rel); forms.add('/' + rel); forms.add('./' + rel);
             }
-            htmlPaths.sort((a, b) => {
-                const aD = a.split('/').length, bD = b.split('/').length;
-                if (aD !== bD) return aD - bD;
-                return a.length - b.length;
-            });
-            this.entryPath = htmlPaths.find(p => /(^|\/)index\.html?$/i.test(p)) || htmlPaths[0];
+            forms.add(cp + '.part1');
+            for (const f of forms) if (!this.index.has(f)) this.index.set(f, url);
 
-            const baseDir = this.entryPath && this.entryPath.includes('/')
-                ? this.entryPath.substring(0, this.entryPath.lastIndexOf('/') + 1) : '';
-
-            for (const [path, data] of files) {
-                if (path.endsWith('/') || path.includes('__MACOSX') || path.endsWith('.DS_Store')) continue;
-
-                const cleanPath = path.replace(/\\/g, '/').replace(/^\/+/, '');
-                const mime = lookupMime(cleanPath);
-                const blob = new Blob([data], { type: mime });
-                const url = URL.createObjectURL(blob);
-                this.blobs.set(cleanPath, url);
-
-                const forms = new Set([cleanPath, '/' + cleanPath, './' + cleanPath, cleanPath.split('/').pop()]);
-                if (baseDir && cleanPath.startsWith(baseDir)) {
-                    const rel = cleanPath.substring(baseDir.length);
-                    forms.add(rel); forms.add('/' + rel); forms.add('./' + rel);
+            // Build import map for ES modules — this is the critical piece
+            // that makes WebGL/module-based games work
+            if (/\.(m?js|wasm)$/i.test(cp)) {
+                const specs = [cp, '/' + cp, './' + cp, cp.split('/').pop()];
+                if (base && cp.startsWith(base)) {
+                    const rel = cp.slice(base.length);
+                    specs.push(rel, '/' + rel, './' + rel);
                 }
-                forms.add(cleanPath + '.part1');
-                for (const form of forms) {
-                    if (!this.index.has(form)) this.index.set(form, url);
+                for (const spec of specs) {
+                    if (!this.importMap.imports[spec]) this.importMap.imports[spec] = url;
                 }
             }
         }
-
-        resolve(url) {
-            if (!url || typeof url !== 'string') return url;
-            if (url.startsWith('blob:') || url.startsWith('data:')) return url;
-            if (this.index.has(url)) return this.index.get(url);
-            try {
-                const parsed = new URL(url, 'http://vfs.local/');
-                const path = decodeURIComponent(parsed.pathname).replace(/^\//, '');
-                if (this.index.has(path)) return this.index.get(path);
-                const filename = path.split('/').pop();
-                if (this.index.has(filename)) return this.index.get(filename);
-            } catch (e) {}
-            return url;
-        }
-
-        getEntryHTML() {
-            return this.entryPath ? this.blobs.get(this.entryPath) : null;
-        }
-
-        destroy() {
-            for (const url of this.blobs.values()) URL.revokeObjectURL(url);
-            this.blobs.clear();
-            this.index.clear();
-        }
     }
 
-    /* ═══════════════════════════════════════════════════════════
-     * MODULE: JAM Loader / Packer
-     * ═══════════════════════════════════════════════════════════ */
-    async function loadJam(file) {
-        const buffer = await file.arrayBuffer();
-        const view = new DataView(buffer);
-        if (view.getUint32(0, false) !== 0x4A414D00) throw new Error('Invalid .JAM file');
-        const payloadLength = view.getUint32(4, true);
-        const payload = new Uint8Array(buffer, 8, payloadLength);
-        const zipData = Base122.decode(payload);
-        const files = fflate.unzipSync(zipData);
-        return new Map(Object.entries(files));
-    }
-
-    async function packJam(fileList) {
-        const map = {};
-        for (const { path, file } of fileList) {
-            const cleanPath = path.replace(/\\/g, '/');
-            if (cleanPath.includes('__MACOSX') || cleanPath.endsWith('.DS_Store')) continue;
-            map[cleanPath] = new Uint8Array(await file.arrayBuffer());
-        }
-        const zipData = fflate.zipSync(map, { level: 1 });
-        const payload = Base122.encode(zipData);
-        const header = new Uint8Array([74, 65, 77, 0]);
-        const length = new Uint8Array(4);
-        new DataView(length.buffer).setUint32(0, payload.length, true);
-        const blob = new Blob([header, length, payload], { type: 'application/octet-stream' });
-        const first = fileList.find(f => f.path.includes('/'));
-        const name = (first ? first.path.split('/')[0] : 'app') + '.jam';
-        const link = document.createElement('a');
-        link.href = URL.createObjectURL(blob);
-        link.download = name;
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(link.href), 10000);
-    }
-
-    /* ═══════════════════════════════════════════════════════════
-     * MODULE: JAM Runtime (injected into iframe)
-     * ═══════════════════════════════════════════════════════════ */
-    function generateRuntime(vfsIndex) {
-        const serialized = JSON.stringify([...vfsIndex]);
-        return `
-(function() {
-    'use strict';
-    const INDEX = new Map(${serialized});
-    function resolve(url) {
-        if (!url || typeof url !== 'string') return url;
-        if (url.startsWith('blob:') || url.startsWith('data:')) return url;
-        if (url.startsWith('http://') || url.startsWith('https://')) return url;
-        if (INDEX.has(url)) return INDEX.get(url);
+    resolve(url) {
+        if (!url || typeof url !== 'string' || url.startsWith('blob:') || url.startsWith('data:') || url.startsWith('http')) return url;
+        if (this.index.has(url)) return this.index.get(url);
         try {
-            const parsed = new URL(url, 'http://vfs.local/');
-            const path = decodeURIComponent(parsed.pathname).replace(/^\\//, '');
-            if (INDEX.has(path)) return INDEX.get(path);
-            const filename = path.split('/').pop();
-            if (INDEX.has(filename)) return INDEX.get(filename);
+            const path = decodeURIComponent(new URL(url, 'http://v/').pathname).replace(/^\//, '');
+            if (this.index.has(path)) return this.index.get(path);
+            const fn = path.split('/').pop();
+            if (this.index.has(fn)) return this.index.get(fn);
         } catch (e) {}
         return url;
     }
-    try {
-        Object.defineProperty(document, 'baseURI', { get: () => 'http://vfs.local/', configurable: true });
-    } catch (e) {}
-    const _fetch = window.fetch;
-    window.fetch = function(input, init) {
-        const url = input instanceof Request ? input.url : input;
-        const resolved = resolve(url);
-        if (resolved !== url) {
-            if (input instanceof Request) return _fetch(new Request(resolved, input), init);
-            return _fetch(resolved, init);
-        }
-        return _fetch(input, init);
-    };
-    const _xhrOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-        return _xhrOpen.call(this, method, resolve(url), ...rest);
-    };
-    const _origSet = Object.getOwnPropertyDescriptor(Element.prototype, 'setAttribute');
-    function patch(ctor, prop) {
-        if (!ctor) return;
-        const desc = Object.getOwnPropertyDescriptor(ctor.prototype, prop);
-        if (!desc || !desc.set) return;
-        Object.defineProperty(ctor.prototype, prop, {
-            set: function(v) { desc.set.call(this, resolve(v)); },
-            get: desc.get, configurable: true
-        });
+
+    getEntry() { return this.entry ? this.blobs.get(this.entry) : null; }
+    getImportMap() { return this.importMap; }
+
+    destroy() {
+        for (const url of this.blobs.values()) URL.revokeObjectURL(url);
+        this.blobs.clear(); this.index.clear();
     }
-    patch(HTMLScriptElement, 'src');
-    patch(HTMLImageElement, 'src');
-    patch(HTMLLinkElement, 'href');
-    patch(HTMLIFrameElement, 'src');
-    patch(HTMLSourceElement, 'src');
-    patch(HTMLVideoElement, 'src');
-    patch(HTMLAudioElement, 'src');
-    patch(HTMLObjectElement, 'data');
-    Element.prototype.setAttribute = function(name, value) {
-        const lower = name.toLowerCase();
-        if (lower === 'src' || lower === 'href' || lower === 'data') {
-            return _origSet.value.call(this, name, resolve(value));
-        }
-        return _origSet.value.call(this, name, value);
+}
+
+/* ── JAM Load / Pack ───────────────────────────────────────── */
+async function loadJam(file) {
+    const buf = await file.arrayBuffer();
+    const view = new DataView(buf);
+    if (view.getUint32(0, false) !== 0x4A414D00) throw new Error('Invalid .JAM file');
+    const payload = new Uint8Array(buf, 8, view.getUint32(4, true));
+    return new Map(Object.entries(fflate.unzipSync(B122.decode(payload))));
+}
+
+async function packJam(fileList) {
+    const map = {};
+    for (const { path, file } of fileList) {
+        const cp = path.replace(/\\/g, '/');
+        if (cp.includes('__MACOSX') || cp.endsWith('.DS_Store')) continue;
+        map[cp] = new Uint8Array(await file.arrayBuffer());
+    }
+    const payload = B122.encode(fflate.zipSync(map, { level: 1 }));
+    const hdr = new Uint8Array([74, 65, 77, 0]);
+    const len = new Uint8Array(4);
+    new DataView(len.buffer).setUint32(0, payload.length, true);
+    const blob = new Blob([hdr, len, payload], { type: 'application/octet-stream' });
+    const first = fileList.find(f => f.path.includes('/'));
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = (first ? first.path.split('/')[0] : 'app') + '.jam';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+}
+
+/* ── JAM Runtime ───────────────────────────────────────────── */
+const jamRuntime = idx => `
+(function(){
+    'use strict';
+    const I=new Map(${JSON.stringify([...idx])});
+    function r(u){
+        if(!u||typeof u!=='string'||u.startsWith('blob:')||u.startsWith('data:')||u.startsWith('http'))return u;
+        if(I.has(u))return I.get(u);
+        try{
+            const p=decodeURIComponent(new URL(u,'http://v/').pathname).replace(/^\\//,'');
+            if(I.has(p))return I.get(p);
+            const f=p.split('/').pop();
+            if(I.has(f))return I.get(f);
+        }catch(e){}
+        return u;
+    }
+    try{Object.defineProperty(document,'baseURI',{get:()=>'http://v/',configurable:true})}catch(e){}
+    const _f=window.fetch;
+    window.fetch=function(i,n){
+        const u=i instanceof Request?i.url:i;
+        const r2=r(u);
+        if(r2!==u){if(i instanceof Request)return _f(new Request(r2,i),n);return _f(r2,n);}
+        return _f(i,n);
     };
-    const _Worker = window.Worker;
-    window.Worker = function(url, options) {
-        return new _Worker(resolve(url), options);
+    const _x=XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open=function(m,u,...rest){return _x.call(this,m,r(u),...rest)};
+    const _s=Object.getOwnPropertyDescriptor(Element.prototype,'setAttribute');
+    function pp(c,p){
+        if(!c)return;
+        const d=Object.getOwnPropertyDescriptor(c.prototype,p);
+        if(!d||!d.set)return;
+        Object.defineProperty(c.prototype,p,{set:function(v){d.set.call(this,r(v))},get:d.get,configurable:true});
+    }
+    pp(HTMLScriptElement,'src');pp(HTMLImageElement,'src');pp(HTMLLinkElement,'href');
+    pp(HTMLIFrameElement,'src');pp(HTMLSourceElement,'src');pp(HTMLVideoElement,'src');
+    pp(HTMLAudioElement,'src');pp(HTMLObjectElement,'data');
+    Element.prototype.setAttribute=function(n,v){
+        const l=n.toLowerCase();
+        if(l==='src'||l==='href'||l==='data')return _s.value.call(this,n,r(v));
+        return _s.value.call(this,n,v);
     };
-    window.Worker.prototype = _Worker.prototype;
-    const _Audio = window.Audio;
-    window.Audio = function(src) { return src ? new _Audio(resolve(src)) : new _Audio(); };
-    window.Audio.prototype = _Audio.prototype;
-    try {
-        Object.defineProperty(window, 'top', { get: () => window.self, configurable: true });
-        Object.defineProperty(window, 'parent', { get: () => window.self, configurable: true });
-        Object.defineProperty(window, 'frameElement', { get: () => null, configurable: true });
-    } catch (e) {}
+    const _W=window.Worker;
+    window.Worker=function(u,o){return new _W(r(u),o)};
+    window.Worker.prototype=_W.prototype;
+    const _A=window.Audio;
+    window.Audio=function(s){return s?new _A(r(s)):new _A()};
+    window.Audio.prototype=_A.prototype;
+    try{
+        Object.defineProperty(window,'top',{get:()=>window.self,configurable:true});
+        Object.defineProperty(window,'parent',{get:()=>window.self,configurable:true});
+        Object.defineProperty(window,'frameElement',{get:()=>null,configurable:true});
+    }catch(e){}
 })();
 `;
-    }
 
-    /* ═══════════════════════════════════════════════════════════
-     * MODULE: HTML Processor (for JAM entry files)
-     * ═══════════════════════════════════════════════════════════ */
-    async function processHTML(html, vfs) {
-        html = html.replace(/<base\b[^>]*\/?>/gi, '');
-        const scripts = [];
-        html = html.replace(
-            /<script([^>]*)>([\s\S]*?)<\/script>/gi,
-            (match, attrs, content) => {
-                scripts.push(content);
-                return `<script${attrs}>\x00SCRIPT${scripts.length - 1}\x00</` + `script>`;
-            }
-        );
-        html = html.replace(
-            /((?:src|href|data)\s*=\s*["'])([^"']+)(["'])/gi,
-            (match, pre, url, post) => {
-                const resolved = vfs.resolve(url);
-                return resolved !== url ? pre + resolved + post : match;
-            }
-        );
-        html = html.replace(
-            /(url\(\s*["']?)([^"')]+)(["']?\s*\))/gi,
-            (match, pre, url, post) => {
-                const resolved = vfs.resolve(url);
-                return resolved !== url ? pre + resolved + post : match;
-            }
-        );
-        html = html.replace(/\x00SCRIPT(\d+)\x00/g, (match, i) => scripts[parseInt(i)]);
-        return html;
-    }
+/* ── HTML Processing ───────────────────────────────────────── */
+async function processHTML(html, vfs) {
+    html = html.replace(/<base\b[^>]*\/?>/gi, '');
+    const scripts = [];
+    html = html.replace(/<script([^>]*)>([\s\S]*?)<\/script>/gi, (m, a, c) => {
+        scripts.push(c);
+        return `<script${a}>\x00S${scripts.length - 1}\x00</` + `script>`;
+    });
+    html = html.replace(/((?:src|href|data)\s*=\s*["'])([^"']+)(["'])/gi, (m, pre, u, post) => {
+        const r = vfs.resolve(u);
+        return r !== u ? pre + r + post : m;
+    });
+    html = html.replace(/(url\(\s*["']?)([^"')]+)(["']?\s*\))/gi, (m, pre, u, post) => {
+        const r = vfs.resolve(u);
+        return r !== u ? pre + r + post : m;
+    });
+    html = html.replace(/\x00S(\d+)\x00/g, (m, i) => scripts[+i]);
+    return html;
+}
 
-    /* ═══════════════════════════════════════════════════════════
-     * MODULE: Core Detection
-     * Single edit point for adding new systems
-     * ═══════════════════════════════════════════════════════════ */
-    const CORE_MAP = {
-        nes: ["nes", "fds"], snes: ["smc", "sfc", "swc"], n64: ["z64", "n64", "v64"],
-        gb: ["gb", "gbc"], gba: ["gba"], nds: ["nds"], psx: ["ps1", "psx", "bin", "img"],
-        segaMD: ["gen", "md"], segaMS: ["sms"], segaGG: ["gg"], pce: ["pce"],
-        ngp: ["ngp"], ws: ["ws", "wsc"], vb: ["vb"], lynx: ["lnx"],
-        atari2600: ["a26"], atari7800: ["a78"], coleco: ["col"], vice_x64: ["d64"]
-    };
+/* ── Core Detection ────────────────────────────────────────── */
+const CORE_MAP = {
+    nes:["nes","fds"],snes:["smc","sfc","swc"],n64:["z64","n64","v64"],
+    gb:["gb","gbc"],gba:["gba"],nds:["nds"],psx:["ps1","psx","bin","img"],
+    segaMD:["gen","md"],segaMS:["sms"],segaGG:["gg"],pce:["pce"],
+    ngp:["ngp"],ws:["ws","wsc"],vb:["vb"],lynx:["lnx"],
+    atari2600:["a26"],atari7800:["a78"],coleco:["col"],vice_x64:["d64"]
+};
+const LABELS = {
+    n64:"N64",gb:"Game Boy",gba:"GBA",nds:"DS",nes:"NES",snes:"SNES",psx:"PS1",
+    vb:"Virtual Boy",segaMD:"Genesis",segaMS:"Master System",lynx:"Lynx",
+    segaGG:"Game Gear",atari7800:"Atari 7800",atari2600:"Atari 2600",
+    pce:"PC Engine",ngp:"NeoGeo Pocket",ws:"WonderSwan",coleco:"ColecoVision",
+    vice_x64:"C64",flash:"Flash",jam:"JAM"
+};
+const BLACKLIST = ['png','jpg','jpeg','webp','gif','svg','js','css','json','txt','ico','html','htm'];
 
-    const SYSTEM_LABELS = {
-        "n64": "N64", "gb": "Game Boy", "gba": "GBA", "nds": "DS", "nes": "NES",
-        "snes": "SNES", "psx": "PS1", "vb": "Virtual Boy", "segaMD": "Genesis",
-        "segaMS": "Master System", "lynx": "Lynx", "segaGG": "Game Gear",
-        "atari7800": "Atari 7800", "atari2600": "Atari 2600", "pce": "PC Engine",
-        "ngp": "NeoGeo Pocket", "ws": "WonderSwan", "coleco": "ColecoVision", "vice_x64": "C64",
-        "flash": "Flash", "jam": "JAM"
-    };
+/* ── State ─────────────────────────────────────────────────── */
+let items = [], groups = new Map(), imgMap = new Map();
+let currentView = 'init', currentSystem = null, currentVfs = null;
+const blobCache = new Map();
 
-    const BLACKLIST_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'js', 'css', 'json', 'txt', 'ico', 'html', 'htm'];
+const grid = document.getElementById('grid');
+const playerLayer = document.getElementById('player-layer');
+const playerContent = document.getElementById('player-content');
+const statusEl = document.getElementById('status');
 
-    /* ═══════════════════════════════════════════════════════════
-     * MODULE: State
-     * ═══════════════════════════════════════════════════════════ */
-    let items = [], systemGroups = new Map(), imgMap = new Map();
-    let pathMap = new Map(), blobCache = new Map();
-    let currentView = 'init', currentSystem = null, pendingItem = null;
-    let currentVfs = null;
+function setStatus(msg) {
+    statusEl.textContent = msg;
+    if (msg) setTimeout(() => { if (statusEl.textContent === msg) statusEl.textContent = ''; }, 3000);
+}
 
-    const grid = document.getElementById('grid');
-    const playerLayer = document.getElementById('player-layer');
-    const playerContent = document.getElementById('player-content');
-    const statusEl = document.getElementById('status');
+/* ── Scanning ──────────────────────────────────────────────── */
+function processFiles(files) {
+    imgMap.forEach(u => URL.revokeObjectURL(u)); imgMap.clear();
+    blobCache.forEach(u => URL.revokeObjectURL(u)); blobCache.clear();
 
-    function setStatus(msg) {
-        statusEl.textContent = msg;
-        if (msg) setTimeout(() => { if (statusEl.textContent === msg) statusEl.textContent = ''; }, 3000);
-    }
-
-    /* ═══════════════════════════════════════════════════════════
-     * MODULE: File Scanning
-     * ═══════════════════════════════════════════════════════════ */
-    function processFiles(files) {
-        imgMap.forEach(url => URL.revokeObjectURL(url));
-        imgMap.clear();
-        pathMap.clear();
-        blobCache.forEach(url => URL.revokeObjectURL(url));
-        blobCache.clear();
-
-        files.forEach(f => {
-            const path = f.webkitRelativePath || f.name;
-            pathMap.set(path, f);
-            const ln = f.name.toLowerCase();
-            if (ln.match(/\.(png|jpg|jpeg|webp)$/)) {
-                const name = f.name.substring(0, f.name.lastIndexOf('.')).toLowerCase();
-                imgMap.set(name, URL.createObjectURL(f));
-            }
-        });
-
-        items = files.filter(f => !f.name.startsWith('.') && f.size > 0).map(f => {
-            const ext = f.name.split('.').pop().toLowerCase();
-            const path = f.webkitRelativePath || f.name;
-            const name = f.name.substring(0, f.name.lastIndexOf('.')) || f.name;
-            let type = 'emu', core = null;
-
-            if (ext === 'swf') { type = 'flash'; core = 'flash'; }
-            else if (ext === 'jam') { type = 'jam'; core = 'jam'; }
-            else if (BLACKLIST_EXT.includes(ext)) return null;
-            else {
-                for (const [c, exts] of Object.entries(CORE_MAP)) {
-                    if (exts.includes(ext)) { core = c; break; }
-                }
-                if (!core) return null;
-            }
-
-            return { name, file: f, path, type, core, ext, thumb: imgMap.get(name.toLowerCase()) };
-        }).filter(i => i !== null).sort((a, b) => a.name.localeCompare(b.name));
-
-        systemGroups.clear();
-        items.forEach(item => {
-            if (!systemGroups.has(item.core)) systemGroups.set(item.core, []);
-            systemGroups.get(item.core).push(item);
-        });
-
-        if (items.length) {
-            grid.classList.remove('hidden');
-            currentView = 'systems';
-            render();
-            setStatus(items.length + ' files loaded');
+    files.forEach(f => {
+        const ln = f.name.toLowerCase();
+        if (ln.match(/\.(png|jpg|jpeg|webp)$/)) {
+            const name = f.name.substring(0, f.name.lastIndexOf('.')).toLowerCase();
+            imgMap.set(name, URL.createObjectURL(f));
         }
-    }
+    });
 
-    /* ═══════════════════════════════════════════════════════════
-     * MODULE: Rendering
-     * ═══════════════════════════════════════════════════════════ */
-    function render() {
-        if (currentView === 'systems') renderSystems();
-        else if (currentView === 'games') renderGames();
-    }
+    items = files.filter(f => !f.name.startsWith('.') && f.size > 0).map(f => {
+        const ext = f.name.split('.').pop().toLowerCase();
+        const name = f.name.substring(0, f.name.lastIndexOf('.')) || f.name;
+        let type = 'emu', core = null;
+        if (ext === 'swf') { type = 'flash'; core = 'flash'; }
+        else if (ext === 'jam') { type = 'jam'; core = 'jam'; }
+        else if (BLACKLIST.includes(ext)) return null;
+        else {
+            for (const [c, exts] of Object.entries(CORE_MAP))
+                if (exts.includes(ext)) { core = c; break; }
+            if (!core) return null;
+        }
+        return { name, file: f, path: f.webkitRelativePath || f.name, type, core, ext, thumb: imgMap.get(name.toLowerCase()) };
+    }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
 
-    function renderSystems() {
-        grid.innerHTML = Array.from(systemGroups.keys()).sort().map(core => {
-            const games = systemGroups.get(core);
-            const label = SYSTEM_LABELS[core] || core;
-            return `<div class="card" onclick="window.showGames('${core}')">
+    groups.clear();
+    items.forEach(i => {
+        if (!groups.has(i.core)) groups.set(i.core, []);
+        groups.get(i.core).push(i);
+    });
+
+    if (items.length) {
+        grid.classList.remove('hidden');
+        currentView = 'systems';
+        render();
+        setStatus(items.length + ' files loaded');
+    }
+}
+
+/* ── Rendering ─────────────────────────────────────────────── */
+function render() {
+    if (currentView === 'systems') {
+        grid.innerHTML = [...groups.keys()].sort().map(core => {
+            const games = groups.get(core);
+            const label = LABELS[core] || core;
+            return `<div class="card" data-core="${core}">
                 <div class="sq">${games[0].thumb ? `<img src="${games[0].thumb}">` : `<span>${label}</span>`}</div>
                 <div class="title">${label} (${games.length})</div>
             </div>`;
         }).join('');
-    }
-
-    function renderGames() {
-        const games = systemGroups.get(currentSystem) || [];
-        const label = SYSTEM_LABELS[currentSystem] || currentSystem;
+    } else if (currentView === 'games' && currentSystem) {
+        const games = groups.get(currentSystem) || [];
         grid.innerHTML = games.map(item => `
-            <div class="card" onclick="window.launchItem(${items.indexOf(item)})">
+            <div class="card" data-idx="${items.indexOf(item)}">
                 <div class="sq">${item.thumb ? `<img src="${item.thumb}">` : ''}</div>
                 <div class="title">${item.name}</div>
             </div>`).join('');
     }
+}
 
-    // Expose for inline onclick handlers
-    window.showGames = (core) => { currentView = 'games'; currentSystem = core; render(); };
-    window.launchItem = (idx) => { launchItem(items[idx]); };
-
-    /* ═══════════════════════════════════════════════════════════
-     * MODULE: Game Launchers
-     * Each type gets its own isolated iframe
-     * ═══════════════════════════════════════════════════════════ */
-    function prepView() {
-        playerLayer.style.display = 'block';
-        playerContent.innerHTML = '';
+grid.addEventListener('click', e => {
+    const card = e.target.closest('.card');
+    if (!card) return;
+    if (card.dataset.core) {
+        currentView = 'games';
+        currentSystem = card.dataset.core;
+        render();
+    } else if (card.dataset.idx !== undefined) {
+        launch(items[+card.dataset.idx]);
     }
+});
 
-    function createFrame() {
-        const ifr = document.createElement('iframe');
-        ifr.style.cssText = 'width:100%;height:100%;border:none;';
-        return ifr;
-    }
+/* ── Launchers ─────────────────────────────────────────────── */
+function frame(html) {
+    const ifr = document.createElement('iframe');
+    ifr.style.cssText = 'width:100%;height:100%;border:none;';
+    playerContent.replaceChildren(ifr);
+    ifr.contentWindow.document.open();
+    ifr.contentWindow.document.write(html);
+    ifr.contentWindow.document.close();
+    return ifr;
+}
 
-    function launchItem(item) {
-        pendingItem = item;
-        if (item.type === 'flash') launchFlash(item);
-        else if (item.type === 'jam') launchJam(item);
-        else if (item.core) launchEmu(item);
-    }
+function launch(item) {
+    playerLayer.style.display = 'block';
+    playerContent.innerHTML = '';
 
-    async function launchEmu(item) {
-        prepView();
+    if (item.type === 'flash') {
         const url = URL.createObjectURL(item.file);
-        const name = item.name.replace(/"/g, '&quot;');
-        const html = `<html><head><title>${name}</title></head><body style="margin:0;background:#000;">
-            <div id="ejs" style="width:100vw;height:100vh;"></div>
-            <script>
-            window.EJS_player='#ejs';
-            window.EJS_gameName="${name}";
-            window.EJS_gameUrl="${url}";
-            window.EJS_core="${item.core}";
-            window.EJS_pathtodata="https://cdn.emulatorjs.org/stable/data/";
-            window.EJS_startOnLoaded=true;
-            window.EJS_disableDatabases=true;
-            const s=document.createElement('script');
-            s.src="https://cdn.emulatorjs.org/stable/data/loader.js";
-            document.body.appendChild(s);
-            <\/script></body></html>`;
-
-        const ifr = createFrame();
-        playerContent.appendChild(ifr);
-        ifr.contentWindow.document.open();
-        ifr.contentWindow.document.write(html);
-        ifr.contentWindow.document.close();
-    }
-
-    async function launchFlash(item) {
-        prepView();
-        const url = URL.createObjectURL(item.file);
-        const name = item.name.replace(/"/g, '&quot;');
-        const html = `<html><head><title>${name}</title>
-            <style>body,html{margin:0;padding:0;background:#000;overflow:hidden;width:100%;height:100%}</style>
-            </head><body>
+        frame(`<html><head><title>${item.name}</title><style>body,html{margin:0;padding:0;background:#000;overflow:hidden;width:100%;height:100%}</style></head><body>
             <script src="https://unpkg.com/@ruffle-rs/ruffle"><\/script>
             <div id="r" style="width:100%;height:100%"></div>
+            <script>window.RufflePlayer=window.RufflePlayer||{};const r=window.RufflePlayer.newest();const p=r.createPlayer();p.style.width='100%';p.style.height='100%';document.getElementById('r').appendChild(p);p.load({url:"${url}"});<\/script>
+            </body></html>`);
+    }
+    else if (item.type === 'jam') {
+        launchJam(item);
+    }
+    else {
+        const url = URL.createObjectURL(item.file);
+        const name = item.name.replace(/"/g, '&quot;');
+        frame(`<html><head><title>${name}</title></head><body style="margin:0;background:#000;">
+            <div id="ejs" style="width:100vw;height:100vh;"></div>
             <script>
-            window.RufflePlayer=window.RufflePlayer||{};
-            const r=window.RufflePlayer.newest();
-            const p=r.createPlayer();
-            p.style.width='100%';
-            p.style.height='100%';
-            document.getElementById('r').appendChild(p);
-            p.load({url:"${url}"});
-            <\/script></body></html>`;
-
-        const ifr = createFrame();
-        playerContent.appendChild(ifr);
-        ifr.contentWindow.document.open();
-        ifr.contentWindow.document.write(html);
-        ifr.contentWindow.document.close();
+            window.EJS_player='#ejs';window.EJS_gameName="${name}";window.EJS_gameUrl="${url}";
+            window.EJS_core="${item.core}";window.EJS_pathtodata="https://cdn.emulatorjs.org/stable/data/";
+            window.EJS_startOnLoaded=true;window.EJS_disableDatabases=true;
+            const s=document.createElement('script');s.src="https://cdn.emulatorjs.org/stable/data/loader.js";document.body.appendChild(s);
+            <\/script></body></html>`);
     }
+}
 
-    async function launchJam(item) {
-        try {
-            prepView();
-            setStatus('Loading ' + item.name + '...');
+async function launchJam(item) {
+    try {
+        setStatus('Loading ' + item.name + '...');
+        const files = await loadJam(item.file);
+        currentVfs = new VFS(files);
+        const entry = currentVfs.getEntry();
+        if (!entry) throw new Error('No HTML entry in JAM');
 
-            // Decode JAM file
-            const files = await loadJam(item.file);
+        const html = await processHTML(await (await fetch(entry)).text(), currentVfs);
+        const runtime = jamRuntime(currentVfs.index);
 
-            // Build VFS
-            currentVfs = new VFS(files);
+        // THE FIX: build and inject the import map alongside the runtime
+        const importMap = JSON.stringify(currentVfs.getImportMap());
+        const inject =
+            `<script type="importmap">${importMap}</` + `script>` +
+            `<script>${runtime}</` + `script>`;
 
-            // Get entry HTML
-            const entryURL = currentVfs.getEntryHTML();
-            if (!entryURL) throw new Error('No HTML entry found in JAM');
+        const hi = html.toLowerCase().indexOf('<head>');
+        const finalHTML = hi !== -1 ? html.slice(0, hi + 6) + inject + html.slice(hi + 6) : inject + html;
 
-            // Fetch and process HTML
-            const response = await fetch(entryURL);
-            const rawHTML = await response.text();
-            const processedHTML = await processHTML(rawHTML, currentVfs);
-
-            // Generate runtime and inject
-            const runtime = generateRuntime(currentVfs.index);
-            const injectStr = `<script>${runtime}</` + `script>`;
-
-            let finalHTML;
-            const headIdx = processedHTML.toLowerCase().indexOf('<head>');
-            if (headIdx !== -1) {
-                finalHTML = processedHTML.slice(0, headIdx + 6) + injectStr + processedHTML.slice(headIdx + 6);
-            } else {
-                finalHTML = injectStr + processedHTML;
-            }
-
-            // Create iframe with srcdoc (same origin → localStorage works)
-            const ifr = createFrame();
-            ifr.srcdoc = finalHTML;
-            playerContent.appendChild(ifr);
-
-            setStatus('');
-        } catch (err) {
-            setStatus('JAM error: ' + err.message);
-            console.error('[jam]', err);
-        }
+        const ifr = document.createElement('iframe');
+        ifr.style.cssText = 'width:100%;height:100%;border:none;';
+        ifr.srcdoc = finalHTML;
+        playerContent.replaceChildren(ifr);
+        setStatus('');
+    } catch (err) {
+        setStatus('JAM error: ' + err.message);
+        console.error('[jam]', err);
     }
+}
 
-    /* ═══════════════════════════════════════════════════════════
-     * MODULE: Navigation & UI
-     * ═══════════════════════════════════════════════════════════ */
-    function goHome() {
-        // Clean up player
-        if (playerLayer.style.display === 'block') {
-            const iframes = playerContent.querySelectorAll('iframe');
-            iframes.forEach(i => {
-                try {
-                    i.contentWindow.document.open();
-                    i.contentWindow.document.write('');
-                    i.contentWindow.document.close();
-                } catch(e) {}
-                i.remove();
-            });
-            playerContent.innerHTML = '';
-
-            if (currentVfs) {
-                currentVfs.destroy();
-                currentVfs = null;
-            }
-
-            blobCache.forEach(url => URL.revokeObjectURL(url));
-            blobCache.clear();
-
-            playerLayer.style.display = 'none';
-            pendingItem = null;
-        }
-
-        // Return to systems view
-        currentView = 'systems';
-        currentSystem = null;
-        if (items.length) render();
+/* ── Navigation ────────────────────────────────────────────── */
+function goHome() {
+    if (playerLayer.style.display === 'block') {
+        playerContent.querySelectorAll('iframe').forEach(i => {
+            try { i.contentWindow.document.open(); i.contentWindow.document.write(''); i.contentWindow.document.close(); } catch(e) {}
+            i.remove();
+        });
+        playerContent.innerHTML = '';
+        if (currentVfs) { currentVfs.destroy(); currentVfs = null; }
+        blobCache.forEach(u => URL.revokeObjectURL(u)); blobCache.clear();
+        playerLayer.style.display = 'none';
     }
+    currentView = 'systems';
+    currentSystem = null;
+    if (items.length) render();
+}
 
-    function toggleFullscreen() {
-        if (!document.fullscreenElement) {
-            document.documentElement.requestFullscreen().catch(() => {});
-        } else {
-            document.exitFullscreen();
-        }
+function toggleFullscreen() {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+    else document.exitFullscreen();
+}
+
+/* ── Wire-up ───────────────────────────────────────────────── */
+document.getElementById('btn-upload').addEventListener('click', () => document.getElementById('up').click());
+document.getElementById('btn-pack').addEventListener('click', () => document.getElementById('pack-up').click());
+document.getElementById('btn-fullscreen').addEventListener('click', toggleFullscreen);
+document.getElementById('btn-home').addEventListener('click', goHome);
+
+document.getElementById('up').addEventListener('change', e => {
+    const files = Array.from(e.target.files);
+    if (files.length) processFiles(files);
+    e.target.value = '';
+});
+
+document.getElementById('pack-up').addEventListener('change', async e => {
+    const files = Array.from(e.target.files).map(f => ({ path: f.webkitRelativePath || f.name, file: f }));
+    if (files.length) {
+        setStatus('Packing ' + files.length + ' files...');
+        try { await packJam(files); setStatus('Packed successfully'); }
+        catch (err) { setStatus('Pack error: ' + err.message); }
     }
+    e.target.value = '';
+});
 
-    /* ═══════════════════════════════════════════════════════════
-     * MODULE: Wire-up
-     * ═══════════════════════════════════════════════════════════ */
-    document.getElementById('up').onchange = (e) => {
-        const files = Array.from(e.target.files);
-        if (files.length) processFiles(files);
-        e.target.value = '';
-    };
-
-    document.getElementById('pack-up').onchange = async (e) => {
-        const files = Array.from(e.target.files).map(f => ({
-            path: f.webkitRelativePath || f.name,
-            file: f
-        }));
-        if (files.length) {
-            setStatus('Packing ' + files.length + ' files...');
-            try {
-                await packJam(files);
-                setStatus('Packed successfully');
-            } catch (err) {
-                setStatus('Pack error: ' + err.message);
-            }
-        }
-        e.target.value = '';
-    };
-
-    </script>
+</script>
 </body>
 </html>
